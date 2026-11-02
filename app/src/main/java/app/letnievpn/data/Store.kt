@@ -35,12 +35,26 @@ class Store(context: Context) {
             return n
         }
 
+    /**
+     * Ключ xudp для ядра xray: ровно 32 байта в base64url без «=» (43 символа).
+     * Раньше сюда попадал UUID — ядро его отвергало и не запускалось, поэтому ключ хранится под новым именем.
+     */
     val xudpKey: String
         get() {
-            val k = sp.getString("xudp", null)
-            if (k != null) return k
-            val n = UUID.randomUUID().toString()
-            sp.edit().putString("xudp", n).apply()
+            val k = sp.getString("xudp32", null)
+            if (k != null && isValidXudpKey(k)) return k
+            val bytes = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+            val n = android.util.Base64.encodeToString(
+                bytes,
+                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+            )
+            sp.edit().putString("xudp32", n).remove("xudp").apply()
             return n
         }
+
+    private fun isValidXudpKey(k: String): Boolean = try {
+        android.util.Base64.decode(k, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP).size == 32
+    } catch (e: IllegalArgumentException) {
+        false
+    }
 }

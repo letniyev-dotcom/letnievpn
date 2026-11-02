@@ -40,6 +40,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -83,7 +86,11 @@ import app.letnievpn.data.Logger
 
 @Composable
 fun MainScreen(onPower: () -> Unit, onReconnect: () -> Unit) {
-    LetnieTheme { Content(onPower, onReconnect) }
+    // размер шрифта не раздуваем системным масштабом — иначе блоки выходят громоздкими
+    val d = LocalDensity.current
+    CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = minOf(d.fontScale, 1f))) {
+        LetnieTheme { Content(onPower, onReconnect) }
+    }
 }
 
 // ── стекло: объёмная заливка в светлой теме, плоская в тёмной ─────────────
@@ -96,22 +103,18 @@ private fun Modifier.glass(
     elevation: Dp,
     shadowColor: Color,
     flatColor: Color,
-): Modifier = if (p.dark) {
-    this.clip(shape).background(flatColor, shape)
-} else {
-    this
-        .shadow(elevation, shape, ambientColor = shadowColor, spotColor = shadowColor)
-        .background(Brush.linearGradient(listOf(a, b), start = Offset.Zero, end = Offset.Infinite), shape)
-        .border(
-            1.5.dp,
-            Brush.linearGradient(
-                listOf(p.rimHi, p.rimLo, p.rimLo, p.rimHi),
-                start = Offset.Zero,
-                end = Offset.Infinite
-            ),
-            shape
-        )
-}
+): Modifier = this
+    .shadow(elevation, shape, ambientColor = shadowColor, spotColor = shadowColor)
+    .background(Brush.linearGradient(listOf(a, b), start = Offset.Zero, end = Offset.Infinite), shape)
+    .border(
+        1.5.dp,
+        Brush.linearGradient(
+            listOf(p.rimHi, p.rimLo, p.rimLo, p.rimHi),
+            start = Offset.Zero,
+            end = Offset.Infinite
+        ),
+        shape
+    )
 
 @Composable
 private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
@@ -153,7 +156,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
                 }
                 onReconnect()
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
             SubsCard(subs, best, current, pings) { id ->
                 Repo.select(id)
                 onReconnect()
@@ -275,20 +278,20 @@ private fun PowerBlock(
         if (on) lerp(p.surface, p.primary, 0.20f) else p.surface, tween(500), label = "flat"
     )
     val shadow by animateColorAsState(
-        if (on) p.primary.copy(alpha = 0.45f) else Color(0x33783C50), tween(500), label = "shadow"
+        if (on) p.primary.copy(alpha = 0.45f) else if (p.dark) Color(0x99000000) else Color(0x33783C50), tween(500), label = "shadow"
     )
     val ringAlpha by animateFloatAsState(
         if (status == VpnStatus.CONNECTING) 1f else 0f, tween(450), label = "ring"
     )
 
     Column(
-        Modifier.fillMaxWidth().padding(top = 40.dp, bottom = 32.dp),
+        Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(Modifier.size(148.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(132.dp), contentAlignment = Alignment.Center) {
             Box(
                 Modifier
-                    .size(148.dp)
+                    .size(132.dp)
                     .glass(p, CircleShape, a, b, 14.dp, shadow, flat)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -297,12 +300,12 @@ private fun PowerBlock(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                PowerIcon(iconColor, 56.dp)
+                PowerIcon(iconColor, 50.dp)
             }
             // кольцо загрузки: плавно появляется вокруг кнопки и исчезает после подключения
             if (ringAlpha > 0.01f) Ring(p.primary, ringAlpha)
         }
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(16.dp))
         Text(
             stringResource(
                 when (status) {
@@ -312,7 +315,7 @@ private fun PowerBlock(
                 }
             ),
             color = if (on) p.primary else p.text,
-            fontSize = 18.sp,
+            fontSize = 17.sp,
             fontWeight = FontWeight.Medium,
         )
         val sub = when {
@@ -328,7 +331,7 @@ private fun PowerBlock(
         Text(
             sub,
             color = if (status == VpnStatus.OFF && connError.isNotBlank()) p.primary else p.text2,
-            fontSize = 14.sp,
+            fontSize = 13.sp,
             modifier = Modifier.padding(top = 2.dp, start = 24.dp, end = 24.dp),
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
@@ -345,8 +348,8 @@ private fun Ring(color: Color, alpha: Float) {
         infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart),
         label = "angle"
     )
-    Canvas(Modifier.requiredSize(156.dp).graphicsLayer { this.alpha = alpha }) {
-        val r = 76.dp.toPx()
+    Canvas(Modifier.requiredSize(140.dp).graphicsLayer { this.alpha = alpha }) {
+        val r = 68.dp.toPx()
         val c = center
         rotateScope(angle, c) {
             drawArc(
@@ -386,24 +389,24 @@ private fun PowerIcon(color: Color, size: Dp) {
 @Composable
 private fun SmartCard(smart: Boolean, onToggle: () -> Unit) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(22.dp)
+    val shape = RoundedCornerShape(20.dp)
     Row(
         Modifier
             .fillMaxWidth()
-            .glass(p, shape, p.ga, p.gb, 8.dp, Color(0x26783C50), p.surface)
-            .padding(start = 18.dp, end = 16.dp, top = 16.dp, bottom = 16.dp),
+            .glass(p, shape, p.ga, p.gb, 8.dp, if (p.dark) Color(0x99000000) else Color(0x26783C50), p.surface)
+            .padding(start = 16.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Column(Modifier.weight(1f)) {
             Text(
                 stringResource(R.string.smart_title),
-                color = p.text, fontSize = 16.sp, fontWeight = FontWeight.Medium
+                color = p.text, fontSize = 15.sp, fontWeight = FontWeight.Medium
             )
             Text(
                 stringResource(R.string.smart_desc),
-                color = p.text2, fontSize = 13.sp, lineHeight = 18.sp,
-                modifier = Modifier.padding(top = 2.dp)
+                color = p.text2, fontSize = 12.sp, lineHeight = 16.sp,
+                modifier = Modifier.padding(top = 1.dp)
             )
         }
         Switch(smart, onToggle)
@@ -415,11 +418,11 @@ private fun Switch(on: Boolean, onToggle: () -> Unit) {
     val p = LocalPalette.current
     val track by animateColorAsState(if (on) p.primary else p.surface, tween(300), label = "track")
     val thumb by animateColorAsState(if (on) p.onPrimary else p.text2, tween(300), label = "thumb")
-    val x by animateDpAsState(if (on) 24.dp else 4.dp, tween(300), label = "x")
+    val x by animateDpAsState(if (on) 22.dp else 4.dp, tween(300), label = "x")
     Box(
         Modifier
-            .size(52.dp, 32.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .size(46.dp, 28.dp)
+            .clip(RoundedCornerShape(14.dp))
             .background(track)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -430,7 +433,7 @@ private fun Switch(on: Boolean, onToggle: () -> Unit) {
         Box(
             Modifier
                 .offset(x = x, y = 4.dp)
-                .size(24.dp)
+                .size(20.dp)
                 .clip(CircleShape)
                 .background(thumb)
         )
@@ -454,9 +457,9 @@ private fun SubsCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
+            .clip(RoundedCornerShape(20.dp))
             .background(p.surface)
-            .padding(vertical = 8.dp)
+            .padding(vertical = 4.dp)
     ) {
         if (subs.isEmpty()) {
             Text(
@@ -476,27 +479,27 @@ private fun SubsCard(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) { shut[sub.id] = !closed }
-                    .padding(start = 18.dp, end = 12.dp, top = 12.dp, bottom = 8.dp),
+                    .padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        sub.name, color = p.text, fontSize = 16.sp, fontWeight = FontWeight.Medium,
+                        sub.name, color = p.text, fontSize = 15.sp, fontWeight = FontWeight.Medium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                     val n = res.getQuantityString(R.plurals.servers, sub.servers.size, sub.servers.size)
                     Text(
                         if (sub.info.isBlank()) n else "$n · ${sub.info}",
-                        color = p.text2, fontSize = 13.sp, lineHeight = 18.sp
+                        color = p.text2, fontSize = 12.sp, lineHeight = 16.sp
                     )
                 }
-                Box(Modifier.rotate(rot)) { PolyIcon(CHEVRON, p.text2, 24.dp) }
+                Box(Modifier.rotate(rot)) { PolyIcon(CHEVRON, p.text2, 22.dp) }
             }
             if (!closed) {
                 sub.servers.forEach { s ->
                     ServerRow(s, s.id == current?.id, s.id == best?.id, pings[s.id]) { onPick(s.id) }
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
             }
         }
     }
@@ -509,24 +512,24 @@ private fun ServerRow(s: Server, selected: Boolean, best: Boolean, ping: Int?, o
     Row(
         Modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(44.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick
             )
-            .padding(start = 18.dp, end = 14.dp),
+            .padding(start = 16.dp, end = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             s.cc,
             color = if (selected) p.primary else p.text2,
-            fontSize = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.4.sp,
-            modifier = Modifier.width(34.dp)
+            fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.4.sp,
+            modifier = Modifier.width(32.dp)
         )
         Text(
             s.name,
-            color = nameColor, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+            color = nameColor, fontSize = 14.sp, fontWeight = FontWeight.Medium,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
@@ -537,11 +540,11 @@ private fun ServerRow(s: Server, selected: Boolean, best: Boolean, ping: Int?, o
                 else -> "$ping мс"
             },
             color = if (best && (ping ?: -1) > 0) p.primary else p.text2,
-            fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            fontSize = 12.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(start = 8.dp)
         )
-        Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-            if (selected) PolyIcon(CHECK, p.primary, 22.dp)
+        Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+            if (selected) PolyIcon(CHECK, p.primary, 20.dp)
         }
     }
 }
