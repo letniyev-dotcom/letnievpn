@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.PixelCopy
 import android.view.View
 import androidx.core.view.drawToBitmap
@@ -72,7 +73,6 @@ import androidx.compose.ui.zIndex
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -101,7 +101,6 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -177,12 +176,9 @@ private fun Modifier.glass(
         shape
     )
 
-/** Кнопка включения: стекло (объём), плоская заливка или кольцо — по выбору в «Оформлении». */
-private fun Modifier.btnSurface(p: Palette, a: Color, b: Color, shadow: Color, flat: Color): Modifier = when (p.btn) {
-    1 -> this.background(flat, CircleShape)
-    2 -> this.border(3.dp, p.primary, CircleShape)
-    else -> this.glass(p, CircleShape, a, b, 14.dp, shadow, flat)
-}
+/** Кнопка включения: стеклянный круг. */
+private fun Modifier.btnSurface(p: Palette, a: Color, b: Color, shadow: Color, flat: Color): Modifier =
+    this.glass(p, CircleShape, a, b, 14.dp, shadow, flat)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -468,7 +464,7 @@ private fun PowerBlock(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                PowerIcon(if (p.btn == 2) p.primary else iconColor, 50.dp)
+                PowerIcon(iconColor, 50.dp)
             }
             // кольцо загрузки: плавно появляется вокруг кнопки и исчезает после подключения
             if (ringAlpha > 0.01f) Ring(p.primary, ringAlpha)
@@ -665,6 +661,8 @@ private fun SubsCard(
     var dragDy by remember { mutableStateOf(0f) }
     // >= 0 — подписка отпущена и доезжает до этой позиции
     var lockTo by remember { mutableStateOf(-1) }
+    // момент последнего долгого нажатия/перетаскивания: отпускание пальца после него не должно раскрывать подписку
+    val dragStamp = remember { longArrayOf(0L) }
 
     // куда сейчас встала бы поднятая подписка: сравниваем её середину с серединами соседей
     fun calcTarget(): Int {
@@ -805,6 +803,7 @@ private fun SubsCard(
                             detectDragGesturesAfterLongPress(
                                 onDragStart = { start ->
                                     if (dragId == null) {
+                                        dragStamp[0] = SystemClock.uptimeMillis()
                                         dragId = id
                                         dragDy = 0f
                                         pointerY = (tops[id] ?: 0f) + start.y
@@ -818,8 +817,8 @@ private fun SubsCard(
                                         pointerY = (tops[id] ?: 0f) + change.position.y
                                     }
                                 },
-                                onDragEnd = { if (dragId == id) drop() },
-                                onDragCancel = { if (dragId == id) drop() },
+                                onDragEnd = { dragStamp[0] = SystemClock.uptimeMillis(); if (dragId == id) drop() },
+                                onDragCancel = { dragStamp[0] = SystemClock.uptimeMillis(); if (dragId == id) drop() },
                             )
                         }
                         .zIndex(if (lifted) 1f else 0f)
@@ -844,7 +843,11 @@ private fun SubsCard(
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
-                            ) { Repo.toggleOpen(sub.id) }
+                            ) {
+                                // долгое нажатие под перетаскивание и его отпускание — не нажатие на подписку
+                                val justDragged = SystemClock.uptimeMillis() - dragStamp[0] < 500
+                                if (dragId == null && !justDragged) Repo.toggleOpen(sub.id)
+                            }
                             .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {

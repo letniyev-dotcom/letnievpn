@@ -75,18 +75,3 @@ fun DotsIcon(color: Color, size: Dp = 24.dp) {
         for (y in listOf(5f, 12f, 19f)) drawCircle(color, radius = 2f * k, center = Offset(12f * k, y * k))
     }
 }
-
-/** Палитра красок (линейная) — пункт «Оформление». */
-@Composable
-fun PaletteIcon(color: Color, size: Dp = 24.dp) {
-    Canvas(Modifier.size(size)) {
-        val k = this.size.width / 24f
-        val path = PathParser().parsePathString(
-            "M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-3.9-4-7.2-9-7.2z"
-        ).toPath()
-        withTransform({ scale(k, k, pivot = Offset.Zero) }) {
-            drawPath(path, color, style = Stroke(2f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-        }
-        for ((x, y) in listOf(7.5f to 11f, 10.5f to 7f, 15f to 7f)) drawCircle(color, radius = 1.3f * k, center = Offset(x * k, y * k))
-    }
-}
