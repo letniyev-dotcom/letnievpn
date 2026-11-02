@@ -49,6 +49,9 @@ object Repo {
 
     /** Приложения-исключения: их трафик идёт мимо VPN (применяется при следующем подключении). */
     val excluded = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Развёрнутые подписки (по id); всё остальное свёрнуто. Хранится на диске. */
+    val opened = MutableStateFlow<Set<String>>(emptySet())
     val selected = MutableStateFlow<String?>(null)
 
     /** пинг в мс по id сервера; -1 — недоступен */
@@ -92,6 +95,7 @@ object Repo {
         accent.value = s.accent
         btnStyle.value = s.btn
         excluded.value = s.excluded
+        opened.value = s.opened
         selected.value = s.selected
     }
 
@@ -118,6 +122,13 @@ object Repo {
         if (smart.value) return best()
         val id = selected.value
         return allServers().firstOrNull { it.id == id } ?: best()
+    }
+
+    fun toggleOpen(id: String) {
+        val n = opened.value.toMutableSet()
+        if (!n.add(id)) n.remove(id)
+        opened.value = n
+        store?.opened = n
     }
 
     fun toggleExcluded(pkg: String) {

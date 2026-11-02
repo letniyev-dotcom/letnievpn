@@ -169,7 +169,7 @@ private class MorphShape(private val rect: Rect, private val radius: Float, priv
 }
 
 private val MenuW = 236.dp
-private val MenuH = 172.dp // 8 + три пункта по 52 + 8
+private val MenuH = 120.dp // 8 + два пункта по 52 + 8
 
 /** Где стоят кнопка, меню и окно (в пикселях экрана) и как между ними переходит поверхность. */
 private class MenuGeo(val button: Rect, val menu: Rect, val win: Rect) {
@@ -194,7 +194,7 @@ private fun menuGeo(d: Density, w: Dp, h: Dp, top: Dp, nav: Dp): MenuGeo = with(
  * Изменения исключений вступают в силу при следующем подключении.
  */
 @Composable
-fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onLook: () -> Unit, onAdd: () -> Unit) {
+fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onAdd: () -> Unit) {
     val p = LocalPalette.current
     val ctx = LocalContext.current
     val d = LocalDensity.current
@@ -284,10 +284,6 @@ fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onLook: () -> Unit, onA
                     }
                     MenuItem("Исключения", mode == 1, { AppsIcon(p.primary, 24.dp) }) {
                         onMode(2)
-                    }
-                    MenuItem("Оформление", mode == 1, { PaletteIcon(p.primary, 24.dp) }) {
-                        onMode(0)
-                        onLook()
                     }
                 }
 

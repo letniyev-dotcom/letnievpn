@@ -36,6 +36,11 @@ class Store(context: Context) {
         get() = sp.getStringSet("excluded", emptySet())?.toSet() ?: emptySet()
         set(v) = sp.edit().putStringSet("excluded", HashSet(v)).apply()
 
+    /** Развёрнутые подписки в списке. По умолчанию все свёрнуты. */
+    var opened: Set<String>
+        get() = sp.getStringSet("opened", emptySet())?.toSet() ?: emptySet()
+        set(v) = sp.edit().putStringSet("opened", HashSet(v)).apply()
+
     var selected: String?
         get() = sp.getString("selected", null)
         set(v) = sp.edit().putString("selected", v).apply()
