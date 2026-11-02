@@ -165,19 +165,68 @@ object Repo {
         -1
     }
 
+    // ── пакетная публикация пингов ───────────────────────────────────
+    // При 100 серверах замеры приходят ~100 раз в секунду. Если выдавать каждый в pings отдельно,
+    // экран перерисовывается сотни раз в секунду и дёргается (перетаскивание, плавное сворачивание).
+    // Поэтому замеры копим и публикуем пачкой раз в ~0,5 с, а на время перетаскивания — держим.
+
+    private val latestPing = ConcurrentHashMap<String, Int>()
+    private val pendingPings = HashMap<String, Int>()
+    private val pingLock = Any()
+    private var flushJob: Job? = null
+
+    /** true, пока пользователь перетаскивает подписку: UI не трогаем, замеры копятся. */
+    @Volatile
+    var holdPings = false
+
+    private fun publishPing(id: String, value: Int) {
+        synchronized(pingLock) {
+            pendingPings[id] = value
+            if (flushJob?.isActive != true) {
+                flushJob = scope.launch {
+                    delay(500)
+                    flushPings()
+                }
+            }
+        }
+    }
+
+    /** Выдаёт накопленные замеры в pings одним обновлением. Во время перетаскивания ничего не делает. */
+    fun flushPings() {
+        if (holdPings) {
+            // повторим позже, когда отпустят
+            synchronized(pingLock) {
+                if (pendingPings.isNotEmpty() && flushJob?.isActive != true) {
+                    flushJob = scope.launch {
+                        delay(300)
+                        flushPings()
+                    }
+                }
+            }
+            return
+        }
+        val batch = synchronized(pingLock) {
+            val c = HashMap(pendingPings)
+            pendingPings.clear()
+            c
+        }
+        if (batch.isNotEmpty()) pings.update { it + batch }
+    }
+
     /** Один замер сервера с записью в pings. Одиночный сбой не сбрасывает показание: «—» только после двух подряд. */
     private fun measureOne(s: Server, timeoutMs: Int) {
         val ms = tcpPing(s.host, s.port, timeoutMs)
         val value = if (ms < 0) {
             val n = (fails[s.id] ?: 0) + 1
             fails[s.id] = n
-            val prev = pings.value[s.id]
+            val prev = latestPing[s.id] ?: pings.value[s.id]
             if (prev != null && prev > 0 && n < 2) prev else -1
         } else {
             fails.remove(s.id)
             ms
         }
-        pings.update { it + (s.id to value) }
+        latestPing[s.id] = value
+        publishPing(s.id, value)
         lastPingAt = android.os.SystemClock.elapsedRealtime()
     }
 
@@ -194,6 +243,7 @@ object Repo {
             }
         }
         lastPingAt = android.os.SystemClock.elapsedRealtime()
+        flushPings()
         if (!quiet) Logger.info("ping", "измерено: рабочих ${pings.value.values.count { it > 0 }} из ${allServers().size}")
     }
 

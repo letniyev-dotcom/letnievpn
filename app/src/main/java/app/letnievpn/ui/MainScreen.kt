@@ -7,6 +7,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -24,6 +25,12 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalView
@@ -142,6 +149,7 @@ private fun Modifier.glass(
         shape
     )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: (String) -> Unit) {
     val p = LocalPalette.current
@@ -156,8 +164,17 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
     val connError by Repo.connError.collectAsState()
     val tunnelMs by Repo.tunnelDelay.collectAsState()
 
-    val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    // Отступы под системные панели берём «независимо от видимости» и запоминаем наибольшие:
+    // при смахивании в панель задач система на миг обнуляет статус-бар и навигацию,
+    // и без этого весь интерфейс подпрыгивал бы вверх.
+    val topNow = WindowInsets.statusBarsIgnoringVisibility.asPaddingValues().calculateTopPadding()
+    val bottomNow = WindowInsets.navigationBarsIgnoringVisibility.asPaddingValues().calculateBottomPadding()
+    val orientation = LocalConfiguration.current.orientation
+    val keep = remember(orientation) { floatArrayOf(0f, 0f) }
+    keep[0] = maxOf(keep[0], topNow.value)
+    keep[1] = maxOf(keep[1], bottomNow.value)
+    val top = keep[0].dp
+    val bottom = keep[1].dp
 
     // Читаем состояния, чтобы экран перерисовывался при их смене
     @Suppress("UNUSED_VARIABLE") val touch = listOf(smart, selected, pings, subs)
@@ -506,63 +523,106 @@ private fun SubsCard(
     val zonePx = with(dens) { 72.dp.toPx() }
     val topLimitPx = with(dens) { (top + 64.dp).toPx() }
     val bottomInsetPx = with(dens) { bottom.toPx() }
-    val tops = remember { mutableMapOf<String, Float>() }
+    // обычные карты, не состояния: их запись не должна перекомпоновывать экран
+    val tops = remember { HashMap<String, Float>() }
+    val heights = remember { HashMap<String, Int>() }
     var pointerY by remember { mutableStateOf(0f) }
 
-    // порядок на время перетаскивания; пересоздаётся, когда меняется состав или порядок в хранилище
+    // порядок в раскладке НЕ меняется, пока тянем: меняется только при отпускании.
+    // Остальные подписки лишь плавно сдвигаются (translationY), поэтому ничего не прыгает.
     val ids = subs.map { it.id }
     val order = remember(ids) { mutableStateListOf<String>().apply { addAll(ids) } }
-    val heights = remember { mutableStateMapOf<String, Int>() }
-    val anims = remember { mutableMapOf<String, Animatable<Float, AnimationVector1D>>() }
     var dragId by remember { mutableStateOf<String?>(null) }
     var dragDy by remember { mutableStateOf(0f) }
+    // >= 0 — подписка отпущена и доезжает до этой позиции
+    var lockTo by remember { mutableStateOf(-1) }
 
-    // перетащили за середину соседа — меняемся с ним местами, сосед плавно доезжает на новое место
-    fun step() {
-        val cur = dragId ?: return
-        val i = order.indexOf(cur)
-        if (i < 0) return
-        val h = (heights[cur] ?: return).toFloat()
-        if (i < order.lastIndex) {
-            val nid = order[i + 1]
-            val nh = (heights[nid] ?: 0).toFloat()
-            if (dragDy > (nh + gapPx) / 2f) {
-                order.removeAt(i)
-                order.add(i + 1, cur)
-                dragDy -= nh + gapPx
-                anims[nid]?.let { a -> scope.launch { a.snapTo(h + gapPx); a.animateTo(0f, tween(220, easing = FastOutSlowInEasing)) } }
-                return
-            }
+    // куда сейчас встала бы поднятая подписка: сравниваем её середину с серединами соседей
+    fun calcTarget(): Int {
+        val cur = dragId ?: return -1
+        if (lockTo >= 0) return lockTo
+        val from = order.indexOf(cur)
+        if (from < 0) return -1
+        val hd = heights[cur] ?: return from
+        var y = 0f
+        val t = FloatArray(order.size)
+        order.forEachIndexed { i, id ->
+            t[i] = y
+            y += (heights[id] ?: 0) + gapPx
         }
-        if (i > 0) {
-            val pid = order[i - 1]
-            val ph = (heights[pid] ?: 0).toFloat()
-            if (dragDy < -(ph + gapPx) / 2f) {
-                order.removeAt(i)
-                order.add(i - 1, cur)
-                dragDy += ph + gapPx
-                anims[pid]?.let { a -> scope.launch { a.snapTo(-(h + gapPx)); a.animateTo(0f, tween(220, easing = FastOutSlowInEasing)) } }
-            }
+        val c = t[from] + dragDy + hd / 2f
+        var to = from
+        for (j in from + 1 until order.size) {
+            if (c > t[j] + (heights[order[j]] ?: 0) / 2f) to = j else break
         }
+        for (j in from - 1 downTo 0) {
+            if (c < t[j] + (heights[order[j]] ?: 0) / 2f) to = j else break
+        }
+        return to
+    }
+
+    val target = remember(order, gapPx) { derivedStateOf { calcTarget() } }
+
+    // на сколько сдвинуть подписку id, пока другую тянут; null — ничего не тянут
+    fun shiftFor(id: String): Float? {
+        val cur = dragId ?: return null
+        if (cur == id) return 0f
+        val from = order.indexOf(cur)
+        val i = order.indexOf(id)
+        val to = target.value
+        if (from < 0 || i < 0 || to < 0) return 0f
+        val hd = (heights[cur] ?: 0) + gapPx
+        return when {
+            i in (from + 1)..to -> -hd
+            i in to until from -> hd
+            else -> 0f
+        }
+    }
+
+    // смещение поднятой подписки, когда она встала на новое место
+    fun finalOffset(from: Int, to: Int): Float {
+        var s = 0f
+        if (to > from) {
+            for (j in from + 1..to) s += (heights[order[j]] ?: 0) + gapPx
+        } else if (to < from) {
+            for (j in to until from) s -= (heights[order[j]] ?: 0) + gapPx
+        }
+        return s
     }
 
     fun drop() {
         val cur = dragId ?: return
-        val a = anims[cur]
-        val rest = dragDy
+        if (lockTo >= 0) return
+        val from = order.indexOf(cur)
+        val to = target.value.takeIf { it >= 0 } ?: from
+        lockTo = to
+        val endY = finalOffset(from, to)
         scope.launch {
-            a?.snapTo(rest)
+            animate(dragDy, endY, animationSpec = tween(180, easing = FastOutSlowInEasing)) { v, _ -> dragDy = v }
+            // порядок и сброс сдвигов — в одном кадре, поэтому скачка нет
+            if (from >= 0 && to != from) {
+                order.removeAt(from)
+                order.add(to, cur)
+            }
             dragId = null
             dragDy = 0f
-            a?.animateTo(0f, tween(220, easing = FastOutSlowInEasing))
+            lockTo = -1
+            Repo.reorderSubs(order.toList())
         }
-        Repo.reorderSubs(order.toList())
+    }
+
+    // пока тянем — не обновляем пинги на экране, иначе он перерисовывается и дёргается
+    val dragging = dragId != null
+    LaunchedEffect(dragging) {
+        Repo.holdPings = dragging
+        if (!dragging) Repo.flushPings()
     }
 
     LaunchedEffect(dragId) {
         if (dragId == null) return@LaunchedEffect
         while (true) {
             withFrameNanos { }
+            if (lockTo >= 0) continue
             val y = pointerY
             val upEdge = topLimitPx + zonePx
             val downEdge = view.height - bottomInsetPx - zonePx
@@ -574,10 +634,7 @@ private fun SubsCard(
             if (v != 0f) {
                 val moved = scroll.scrollBy(v * 16f)
                 // список поехал под пальцем — подписка должна остаться под ним
-                if (moved != 0f) {
-                    dragDy += moved
-                    step()
-                }
+                if (moved != 0f) dragDy += moved
             }
         }
     }
@@ -596,7 +653,14 @@ private fun SubsCard(
         order.toList().forEach { id ->
             val sub = subs.firstOrNull { it.id == id } ?: return@forEach
             key(id) {
-                val anim = remember { Animatable(0f) }.also { anims[id] = it }
+                // сдвиг этой подписки, пока тянут другую: плавно едет к нужному месту
+                val shift = remember { Animatable(0f) }
+                LaunchedEffect(id, order) {
+                    snapshotFlow { shiftFor(id) }.collect { v ->
+                        if (v == null) shift.snapTo(0f)
+                        else shift.animateTo(v, tween(200, easing = FastOutSlowInEasing))
+                    }
+                }
                 val lifted = dragId == id
                 val lift by animateFloatAsState(if (lifted) 1.02f else 1f, tween(160), label = "lift")
                 // недоступные серверы (пинг не прошёл) скрываются сами и возвращаются, когда снова отвечают
@@ -607,31 +671,37 @@ private fun SubsCard(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        // удержание поднимает подписку, дальше её можно двигать вверх и вниз.
-                        // ловим жест ДО сдвига (graphicsLayer): иначе подписка едет за пальцем, палец «стоит» на ней, и она пружинит
+                        // жест ловим ДО сдвига (graphicsLayer): позиция пальца не зависит от смещения подписки
                         .pointerInput(id) {
                             detectDragGesturesAfterLongPress(
                                 onDragStart = { start ->
-                                    dragId = id
-                                    dragDy = 0f
-                                    pointerY = (tops[id] ?: 0f) + start.y
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (dragId == null) {
+                                        dragId = id
+                                        dragDy = 0f
+                                        pointerY = (tops[id] ?: 0f) + start.y
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    }
                                 },
                                 onDrag = { change, amount ->
-                                    change.consume()
-                                    dragDy += amount.y
-                                    pointerY = (tops[id] ?: 0f) + change.position.y
-                                    step()
+                                    if (dragId == id && lockTo < 0) {
+                                        change.consume()
+                                        dragDy += amount.y
+                                        pointerY = (tops[id] ?: 0f) + change.position.y
+                                    }
                                 },
-                                onDragEnd = { drop() },
-                                onDragCancel = { drop() },
+                                onDragEnd = { if (dragId == id) drop() },
+                                onDragCancel = { if (dragId == id) drop() },
                             )
                         }
                         .zIndex(if (lifted) 1f else 0f)
                         .onSizeChanged { heights[id] = it.height }
                         .onGloballyPositioned { tops[id] = it.positionInWindow().y }
                         .graphicsLayer {
-                            translationY = if (lifted) dragDy else anim.value
+                            translationY = when {
+                                lifted -> dragDy
+                                dragId == null -> 0f
+                                else -> shift.value
+                            }
                             scaleX = lift
                             scaleY = lift
                         }
@@ -708,7 +778,10 @@ private fun Collapsible(expanded: Boolean, content: @Composable () -> Unit) {
                 layout(placeable.width, h) { placeable.place(0, shift) }
             }
             .clipToBounds()
-            .graphicsLayer { alpha = progress.value }
+            .graphicsLayer {
+                alpha = progress.value
+                compositingStrategy = CompositingStrategy.ModulateAlpha
+            }
     ) { content() }
 }
 
