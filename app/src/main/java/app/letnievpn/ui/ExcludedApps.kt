@@ -168,7 +168,7 @@ private class MorphShape(private val rect: Rect, private val radius: Float, priv
 }
 
 private val MenuW = 236.dp
-private val MenuH = 184.dp // 8 + три пункта по 56 + 8
+private val MenuH = 172.dp // 8 + три пункта по 52 + 8
 
 /** Где стоят кнопка, меню и окно (в пикселях экрана) и как между ними переходит поверхность. */
 private class MenuGeo(val button: Rect, val menu: Rect, val win: Rect) {
@@ -227,7 +227,7 @@ fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onAdd: () -> Unit) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .graphicsLayer { alpha = t.value.coerceIn(0f, 1f) }
+                    .graphicsLayer { alpha = (t.value - 1f).coerceIn(0f, 1f) } // затемняем только под окном, меню без затемнения
                     .background(Color.Black.copy(alpha = if (p.dark) 0.28f else 0.16f))
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -250,7 +250,6 @@ fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onAdd: () -> Unit) {
                             1f + 0.7f * w
                         )
                         clip = true
-                        shadowElevation = 14.dp.toPx() * tt.coerceIn(0f, 1f)
                         alpha = (tt / 0.15f).coerceIn(0f, 1f)
                     }
                     .background(p.surface)
@@ -273,15 +272,15 @@ fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onAdd: () -> Unit) {
                         }
                         .padding(8.dp)
                 ) {
-                    MenuItem("Добавить подписку", "возьмём из буфера обмена", mode == 1, { PlusIcon(p.primary, 24.dp) }) {
+                    MenuItem("Добавить подписку", mode == 1, { PlusIcon(p.primary, 24.dp) }) {
                         onAdd()
                         onMode(0)
                     }
-                    MenuItem("Исключения", "приложения мимо vpn", mode == 1, { AppsIcon(p.primary, 24.dp) }) {
+                    MenuItem("Исключения", mode == 1, { AppsIcon(p.primary, 24.dp) }) {
                         onMode(2)
                     }
                     // пока ни к чему не подключено
-                    MenuItem("Оформление", "скоро появится", mode == 1, { PaletteIcon(p.text2, 24.dp) }) {
+                    MenuItem("Оформление", mode == 1, { PaletteIcon(p.text2, 24.dp) }) {
                         onMode(0)
                     }
                 }
@@ -301,12 +300,12 @@ fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onAdd: () -> Unit) {
 }
 
 @Composable
-private fun MenuItem(title: String, sub: String, enabled: Boolean, icon: @Composable () -> Unit, onClick: () -> Unit) {
+private fun MenuItem(title: String, enabled: Boolean, icon: @Composable () -> Unit, onClick: () -> Unit) {
     val p = LocalPalette.current
     Row(
         Modifier
             .fillMaxWidth()
-            .height(56.dp)
+            .height(52.dp)
             .clip(RoundedCornerShape(16.dp))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -319,10 +318,7 @@ private fun MenuItem(title: String, sub: String, enabled: Boolean, icon: @Compos
     ) {
         icon()
         Spacer(Modifier.width(14.dp))
-        Column {
-            Text(title, color = p.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-            Text(sub, color = p.text2, fontSize = 12.sp, maxLines = 1)
-        }
+        Text(title, color = p.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
 
