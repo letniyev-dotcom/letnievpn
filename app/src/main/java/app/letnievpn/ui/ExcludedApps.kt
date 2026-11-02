@@ -1,14 +1,23 @@
 package app.letnievpn.ui
 
 import android.content.Intent
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,63 +27,89 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import app.letnievpn.data.Repo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 private class AppRow(val pkg: String, val label: String)
 
+private val SheetEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+
 /**
- * Приложения, которые ходят мимо VPN — шторка снизу.
+ * Приложения, которые ходят мимо VPN — шторка снизу, без затемнения фона.
+ * Кладётся внутрь корневого Box экрана, поверх остального.
  * Изменения вступают в силу при следующем подключении.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ExcludedAppsDialog(onClose: () -> Unit) {
+fun BoxScopeExcludedSheet(visible: Boolean, onClose: () -> Unit) {
+    BackHandler(enabled = visible, onBack = onClose)
+
+    // тап мимо шторки закрывает её (фон при этом не затемняем)
+    if (visible) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClose)
+        )
+    }
+
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = slideInVertically(tween(420, easing = SheetEase)) { it } + fadeIn(tween(260)),
+            exit = slideOutVertically(tween(300, easing = SheetEase)) { it } + fadeOut(tween(220)),
+        ) {
+            SheetContent(onClose)
+        }
+    }
+}
+
+@Composable
+private fun SheetContent(onClose: () -> Unit) {
     val p = LocalPalette.current
     val ctx = LocalContext.current
     val excluded by Repo.excluded.collectAsState()
     // порядок фиксируем при открытии: выбранные сверху, дальше по алфавиту — строки не прыгают при нажатии
     val startExcluded = remember { Repo.excluded.value }
-    var query by remember { mutableStateOf("") }
 
     val apps by produceState<List<AppRow>?>(null) {
         value = withContext(Dispatchers.IO) {
@@ -91,133 +126,122 @@ fun ExcludedAppsDialog(onClose: () -> Unit) {
         }
     }
 
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val listState = rememberLazyListState()
+    val fade by remember {
+        derivedStateOf {
+            if (listState.firstVisibleItemIndex > 0) 1f
+            else (listState.firstVisibleItemScrollOffset / 60f).coerceIn(0f, 1f)
+        }
+    }
 
-    ModalBottomSheet(
-        onDismissRequest = onClose,
-        sheetState = sheetState,
-        containerColor = p.bg,
-        scrimColor = Color.Black.copy(alpha = if (p.dark) 0.6f else 0.32f),
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-        tonalElevation = 0.dp,
-        // системные отступы раздаём сами: список уходит под панель навигации, а не обрезается над ней
-        contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
-        dragHandle = {
+    // свайп вниз по верхней части закрывает шторку
+    val scope = rememberCoroutineScope()
+    val offsetY = remember { Animatable(0f) }
+    val screenH = with(LocalDensity.current) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    val shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .fillMaxHeight(0.88f)
+            .offset { IntOffset(0, offsetY.value.roundToInt()) }
+            .clip(shape)
+            .background(p.surface)
+    ) {
+        val list = apps
+        if (list == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = p.primary, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
+            }
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                state = listState,
+                contentPadding = PaddingValues(top = 36.dp, bottom = bottom + 16.dp)
+            ) {
+                items(list, key = { it.pkg }) { app ->
+                    val on = app.pkg in excluded
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { Repo.toggleExcluded(app.pkg) }
+                            .padding(horizontal = 20.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AppIcon(app.pkg)
+                        Spacer(Modifier.width(14.dp))
+                        Text(
+                            app.label,
+                            color = p.text,
+                            fontSize = 16.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        CheckBox(on)
+                    }
+                }
+            }
+        }
+
+        // фейд вместо шапки — тот же градиент, что на главном экране, цвет шторки
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(88.dp)
+                .graphicsLayer { alpha = fade }
+                .background(
+                    Brush.verticalGradient(
+                        0.00f to p.surface,
+                        0.40f to p.surface,
+                        0.52f to p.surface.copy(alpha = 0.90f),
+                        0.64f to p.surface.copy(alpha = 0.65f),
+                        0.76f to p.surface.copy(alpha = 0.38f),
+                        0.88f to p.surface.copy(alpha = 0.14f),
+                        1.00f to p.surface.copy(alpha = 0f),
+                    )
+                )
+        )
+
+        // ручка + зона для свайпа
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(36.dp)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { change, dy ->
+                            change.consume()
+                            scope.launch { offsetY.snapTo((offsetY.value + dy).coerceAtLeast(0f)) }
+                        },
+                        onDragEnd = {
+                            scope.launch {
+                                if (offsetY.value > 140f) {
+                                    offsetY.animateTo(screenH, tween(220))
+                                    onClose()
+                                } else {
+                                    offsetY.animateTo(0f, tween(260, easing = SheetEase))
+                                }
+                            }
+                        },
+                        onDragCancel = { scope.launch { offsetY.animateTo(0f, tween(260, easing = SheetEase)) } }
+                    )
+                },
+            contentAlignment = Alignment.TopCenter
+        ) {
             Box(
                 Modifier
-                    .padding(top = 10.dp, bottom = 6.dp)
+                    .padding(top = 10.dp)
                     .width(36.dp)
                     .height(4.dp)
                     .clip(RoundedCornerShape(2.dp))
                     .background(p.text2.copy(alpha = 0.45f))
             )
-        }
-    ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.88f)
-                .imePadding()
-        ) {
-            // заголовок по центру, счётчик под ним
-            Column(
-                Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    "Приложения без VPN",
-                    color = p.text,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    if (excluded.isEmpty()) "Ничего не выбрано" else "Выбрано: ${excluded.size}",
-                    color = p.text2,
-                    fontSize = 13.sp
-                )
-            }
-
-            // поиск
-            Row(
-                Modifier
-                    .padding(horizontal = 16.dp)
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(p.surface)
-                    .padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Canvas(Modifier.size(20.dp)) {
-                    val k = size.width / 24f
-                    drawCircle(p.primary, radius = 6.5f * k, center = Offset(10.5f * k, 10.5f * k), style = Stroke(2f * k))
-                    drawLine(p.primary, Offset(15.5f * k, 15.5f * k), Offset(20f * k, 20f * k), 2f * k, StrokeCap.Round)
-                }
-                Spacer(Modifier.width(10.dp))
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    if (query.isEmpty()) Text("Поиск", color = p.text2, fontSize = 16.sp)
-                    BasicTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        singleLine = true,
-                        textStyle = TextStyle(color = p.text, fontSize = 16.sp),
-                        cursorBrush = SolidColor(p.primary),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-
-            val list = apps
-            if (list == null) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = p.primary, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
-                }
-            } else {
-                val shownList = remember(list, query) {
-                    val q = query.trim().lowercase()
-                    if (q.isEmpty()) list else list.filter { it.label.lowercase().contains(q) }
-                }
-                if (shownList.isEmpty()) {
-                    Box(Modifier.fillMaxSize().padding(top = 32.dp), contentAlignment = Alignment.TopCenter) {
-                        Text("Не найдено", color = p.text2, fontSize = 15.sp)
-                    }
-                } else {
-                    LazyColumn(
-                        Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = bottom + 16.dp)
-                    ) {
-                        items(shownList, key = { it.pkg }) { app ->
-                            val on = app.pkg in excluded
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null
-                                    ) { Repo.toggleExcluded(app.pkg) }
-                                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                AppIcon(app.pkg)
-                                Spacer(Modifier.width(14.dp))
-                                Text(
-                                    app.label,
-                                    color = p.text,
-                                    fontSize = 16.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                CheckBox(on)
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }

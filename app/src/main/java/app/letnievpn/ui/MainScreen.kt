@@ -150,7 +150,6 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
 
     val scroll = rememberScrollState()
     var showExcluded by remember { mutableStateOf(false) }
-    if (showExcluded) ExcludedAppsDialog { showExcluded = false }
     Box(Modifier.fillMaxSize().background(p.bg)) {
         Column(
             Modifier
@@ -263,6 +262,8 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                 PlusIcon(p.primary, 26.dp)
             }
         }
+    
+        BoxScopeExcludedSheet(showExcluded) { showExcluded = false }
     }
 }
 
