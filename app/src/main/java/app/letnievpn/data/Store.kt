@@ -16,6 +16,16 @@ class Store(context: Context) {
         get() = sp.getBoolean("smart", true)
         set(v) = sp.edit().putBoolean("smart", v).apply()
 
+    /** Тема: -1 — как в системе, 0 — светлая, 1 — тёмная. */
+    var theme: Int
+        get() = sp.getInt("theme", -1)
+        set(v) = sp.edit().putInt("theme", v).apply()
+
+    /** Пакеты приложений, которые ходят мимо VPN. */
+    var excluded: Set<String>
+        get() = sp.getStringSet("excluded", emptySet())?.toSet() ?: emptySet()
+        set(v) = sp.edit().putStringSet("excluded", HashSet(v)).apply()
+
     var selected: String?
         get() = sp.getString("selected", null)
         set(v) = sp.edit().putString("selected", v).apply()

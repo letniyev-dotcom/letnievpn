@@ -37,6 +37,12 @@ object Repo {
 
     val subs = MutableStateFlow<List<Sub>>(emptyList())
     val smart = MutableStateFlow(true)
+
+    /** Выбранная вручную тема: true — тёмная, false — светлая, null — как в системе. */
+    val themeDark = MutableStateFlow<Boolean?>(null)
+
+    /** Приложения-исключения: их трафик идёт мимо VPN (применяется при следующем подключении). */
+    val excluded = MutableStateFlow<Set<String>>(emptySet())
     val selected = MutableStateFlow<String?>(null)
 
     /** пинг в мс по id сервера; -1 — недоступен */
@@ -76,6 +82,8 @@ object Repo {
         store = s
         subs.value = SubJson.fromJson(s.subsJson)
         smart.value = s.smart
+        themeDark.value = when (s.theme) { 0 -> false; 1 -> true; else -> null }
+        excluded.value = s.excluded
         selected.value = s.selected
     }
 
@@ -102,6 +110,18 @@ object Repo {
         if (smart.value) return best()
         val id = selected.value
         return allServers().firstOrNull { it.id == id } ?: best()
+    }
+
+    fun toggleExcluded(pkg: String) {
+        val n = excluded.value.toMutableSet()
+        if (!n.add(pkg)) n.remove(pkg)
+        excluded.value = n
+        store?.excluded = n
+    }
+
+    fun setThemeDark(v: Boolean) {
+        themeDark.value = v
+        store?.theme = if (v) 1 else 0
     }
 
     fun setSmart(v: Boolean) {

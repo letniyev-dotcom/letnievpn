@@ -2,7 +2,6 @@ package app.letnievpn.ui
 
 import android.content.ClipboardManager
 import android.content.Context
-import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -55,6 +54,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,7 +86,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.letnievpn.R
-import app.letnievpn.data.Logger
 import app.letnievpn.data.Repo
 import app.letnievpn.data.Server
 import app.letnievpn.data.Sub
@@ -149,6 +149,8 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
     else subs.flatMap { it.servers }.firstOrNull { it.id == vpnServer } ?: current
 
     val scroll = rememberScrollState()
+    var showExcluded by remember { mutableStateOf(false) }
+    if (showExcluded) ExcludedAppsDialog { showExcluded = false }
     Box(Modifier.fillMaxSize().background(p.bg)) {
         Column(
             Modifier
@@ -193,7 +195,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                 )
         )
 
-        // шапка: слева «скачать журнал», логотип и заголовок по центру, справа «+»
+        // шапка: слева смена темы и приложения-исключения, логотип и заголовок по центру, справа «+»
         Box(
             Modifier
                 .fillMaxWidth()
@@ -224,23 +226,28 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
-                    ) {
-                        // скачать журнал: сохраняется в «Загрузки», внутри нет ключей и адресов серверов
-                        Repo.scope.launch {
-                            val where = Logger.export(ctx)
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(
-                                    ctx,
-                                    if (where != null) "Журнал сохранён: $where" else "Не удалось сохранить журнал",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
-                    },
+                    ) { Repo.setThemeDark(!p.dark) },
                 contentAlignment = Alignment.Center
             ) {
-                PolyIcon(DOWNLOAD_ARROW, p.primary, 24.dp)
-                PolyIcon(DOWNLOAD_BAR, p.primary, 24.dp)
+                // в тёмной теме показываем солнце (переключить на светлую), в светлой — луну
+                PolyIcon(if (p.dark) SUN else MOON, p.primary, 24.dp)
+            }
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 52.dp)
+                    .size(48.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { showExcluded = true },
+                contentAlignment = Alignment.Center
+            ) {
+                // иконка «приложения»: четыре квадрата
+                PolyIcon(APP_TL, p.primary, 22.dp)
+                PolyIcon(APP_TR, p.primary, 22.dp)
+                PolyIcon(APP_BL, p.primary, 22.dp)
+                PolyIcon(APP_BR, p.primary, 22.dp)
             }
             Box(
                 Modifier
@@ -647,11 +654,21 @@ private val PLUS = listOf(
     19f to 13f, 13f to 13f, 13f to 19f, 11f to 19f, 11f to 13f, 5f to 13f,
     5f to 11f, 11f to 11f, 11f to 5f, 13f to 5f, 13f to 11f, 19f to 11f
 )
-private val DOWNLOAD_ARROW = listOf(
-    19f to 9f, 15f to 9f, 15f to 3f, 9f to 3f, 9f to 9f, 5f to 9f, 12f to 16f
+private val APP_TL = listOf(3f to 3f, 11f to 3f, 11f to 11f, 3f to 11f)
+private val APP_TR = listOf(13f to 3f, 21f to 3f, 21f to 11f, 13f to 11f)
+private val APP_BL = listOf(3f to 13f, 11f to 13f, 11f to 21f, 3f to 21f)
+private val APP_BR = listOf(13f to 13f, 21f to 13f, 21f to 21f, 13f to 21f)
+private val MOON = listOf(
+    11.38f to 3.02f, 8.68f to 3.64f, 6.29f to 5.04f, 4.45f to 7.11f, 3.32f to 9.64f, 3.01f to 12.39f,
+    3.55f to 15.10f, 4.90f to 17.53f, 6.91f to 19.42f, 9.41f to 20.62f, 12.15f to 21.00f, 14.88f to 20.53f,
+    17.34f to 19.25f, 19.29f to 17.28f, 20.55f to 14.81f, 18.53f to 15.72f, 16.34f to 16.00f, 14.16f to 15.62f,
+    12.18f to 14.63f, 10.58f to 13.10f, 9.49f to 11.18f, 9.02f to 9.02f, 9.19f to 6.81f, 10.00f to 4.75f
 )
-private val DOWNLOAD_BAR = listOf(
-    5f to 18f, 5f to 20f, 19f to 20f, 19f to 18f
+private val SUN = listOf(
+    21.50f to 12.00f, 17.80f to 13.55f, 20.23f to 16.75f, 16.24f to 16.24f, 16.75f to 20.23f, 13.55f to 17.80f,
+    12.00f to 21.50f, 10.45f to 17.80f, 7.25f to 20.23f, 7.76f to 16.24f, 3.77f to 16.75f, 6.20f to 13.55f,
+    2.50f to 12.00f, 6.20f to 10.45f, 3.77f to 7.25f, 7.76f to 7.76f, 7.25f to 3.77f, 10.45f to 6.20f,
+    12.00f to 2.50f, 13.55f to 6.20f, 16.75f to 3.77f, 16.24f to 7.76f, 20.23f to 7.25f, 17.80f to 10.45f
 )
 private val CHEVRON = listOf(
     7.41f to 8.59f, 12f to 13.17f, 16.59f to 8.59f, 18f to 10f, 12f to 16f, 6f to 10f

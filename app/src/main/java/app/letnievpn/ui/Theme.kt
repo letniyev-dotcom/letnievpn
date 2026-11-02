@@ -6,6 +6,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import app.letnievpn.data.Repo
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
@@ -48,15 +51,16 @@ val DarkPalette = Palette(
     text2 = Color(0xFF9A9A9A),
     ga = Color(0xFF2E2E2E),
     gb = Color(0xFF191919),
-    rimHi = Color(0x4DFFFFFF),
-    rimLo = Color(0x0AFFFFFF),
+    rimHi = Color(0x1FFFFFFF),
+    rimLo = Color(0x05FFFFFF),
 )
 
 val LocalPalette = staticCompositionLocalOf { LightPalette }
 
 @Composable
 fun LetnieTheme(content: @Composable () -> Unit) {
-    val p = if (isSystemInDarkTheme()) DarkPalette else LightPalette
+    val chosen by Repo.themeDark.collectAsState()
+    val p = if (chosen ?: isSystemInDarkTheme()) DarkPalette else LightPalette
     val scheme = if (p.dark) {
         darkColorScheme(primary = p.primary, background = p.bg, surface = p.surface, onSurface = p.text)
     } else {

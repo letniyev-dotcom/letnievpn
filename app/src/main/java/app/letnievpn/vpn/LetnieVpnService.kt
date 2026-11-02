@@ -347,6 +347,14 @@ class LetnieVpnService : VpnService() {
         } catch (e: Exception) {
             // пакет всегда существует
         }
+        // Приложения-исключения ходят напрямую, мимо VPN
+        Repo.excluded.value.forEach { pkg ->
+            try {
+                b.addDisallowedApplication(pkg)
+            } catch (e: Exception) {
+                // приложение удалили — пропускаем
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setMetered(false)
         tun = b.establish() ?: error("не удалось создать VPN-интерфейс")
     }
