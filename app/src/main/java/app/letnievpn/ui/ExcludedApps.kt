@@ -113,6 +113,10 @@ internal object ExcludedAppsCache {
 private val RevealOpen = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
 private val RevealShut = CubicBezierEasing(0.65f, 0f, 0.35f, 1f)
 
+// на конце дуги cos(π/2) в Float чуть меньше нуля, а дробная степень отрицательного числа — NaN, и контур пропадает целиком
+private fun sn(t: Float, e: Float) = sin(t).coerceIn(0f, 1f).pow(e)
+private fun cs(t: Float, e: Float) = cos(t).coerceIn(0f, 1f).pow(e)
+
 /**
  * Скругления «как в iOS» (CSS corner-shape: superellipse(k)): вместо дуги окружности угол — кривая
  * |x|^n + |y|^n = 1, где n = 2^k. Плавный переход в прямую сторону, без заметного «излома» кривизны.
@@ -130,25 +134,25 @@ private class SquircleShape(private val radius: Dp, private val k: Float = 1.7f)
         // верхний правый
         for (i in 1..steps) {
             val t = i / steps.toFloat() * (PI / 2).toFloat()
-            path.lineTo(w - r + r * sin(t).pow(e), r - r * cos(t).pow(e))
+            path.lineTo(w - r + r * sn(t, e), r - r * cs(t, e))
         }
         path.lineTo(w, h - r)
         // нижний правый
         for (i in 1..steps) {
             val t = i / steps.toFloat() * (PI / 2).toFloat()
-            path.lineTo(w - r + r * cos(t).pow(e), h - r + r * sin(t).pow(e))
+            path.lineTo(w - r + r * cs(t, e), h - r + r * sn(t, e))
         }
         path.lineTo(r, h)
         // нижний левый
         for (i in 1..steps) {
             val t = i / steps.toFloat() * (PI / 2).toFloat()
-            path.lineTo(r - r * sin(t).pow(e), h - r + r * cos(t).pow(e))
+            path.lineTo(r - r * sn(t, e), h - r + r * cs(t, e))
         }
         path.lineTo(0f, r)
         // верхний левый
         for (i in 1..steps) {
             val t = i / steps.toFloat() * (PI / 2).toFloat()
-            path.lineTo(r - r * cos(t).pow(e), r - r * sin(t).pow(e))
+            path.lineTo(r - r * cs(t, e), r - r * sn(t, e))
         }
         path.close()
         return Outline.Generic(path)
