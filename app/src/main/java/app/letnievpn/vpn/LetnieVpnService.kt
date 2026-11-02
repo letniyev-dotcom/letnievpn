@@ -27,6 +27,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import libv2ray.CoreCallbackHandler
@@ -34,6 +36,7 @@ import libv2ray.CoreController
 import libv2ray.Libv2ray
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Настоящий VPN: создаёт TUN-интерфейс и отдаёт его дескриптор ядру xray (libv2ray),
@@ -112,11 +115,13 @@ class LetnieVpnService : VpnService() {
                 Logger.info("vpn", "кандидаты: " + order.take(4).joinToString { "${it.name} ${Repo.pings.value[it.id]?.takeIf { p -> p > 0 } ?: "—"} мс" })
                 ensureTun()
                 val smart = Repo.smart.value
-                // Ручной режим — только выбранный сервер. Умный — до четырёх самых быстрых,
-                // и «Подключено» показываем только когда через сервер реально пошёл трафик.
-                val tries = if (smart) order.take(4) else order.take(1)
+                // Ручной режим — только выбранный сервер. Умный — до пяти самых быстрых; каждый проверяется
+                // настоящими запросами к YouTube, Telegram, Google и др. (см. SERVICES). Берём первый, где работают
+                // все важные сервисы; если такого нет — тот, где работает больше всего.
+                val tries = if (smart) order.take(5) else order.take(1)
                 var connected: Server? = null
                 var firstStarted: Server? = null
+                var bestPartial: Pair<Server, ProbeResult>? = null
                 var err = ""
                 for (s in tries) {
                     val e = startCore(s)
@@ -132,16 +137,29 @@ class LetnieVpnService : VpnService() {
                         break
                     }
                     delay(400) // даём туннелю подняться
-                    val ms = measure()
+                    val r = probeServices()
                     ensureActive()
-                    if (ms >= 0) {
-                        Logger.info("vpn", "${s.name}: трафик идёт, ${ms} мс")
-                        Repo.tunnelDelay.value = ms
+                    markHealth(s, r)
+                    Logger.info("vpn", "${s.name}: ${r.summary()}")
+                    if (r.ok.isEmpty()) {
+                        err = "через ${s.name} нет трафика"
+                        continue
+                    }
+                    if (r.allCritical) {
+                        Repo.tunnelDelay.value = r.ms
                         connected = s
                         break
                     }
-                    Logger.info("vpn", "${s.name}: трафик не идёт, пробую следующий")
-                    err = "через ${s.name} нет трафика"
+                    if (bestPartial == null || r.score > bestPartial.second.score) bestPartial = s to r
+                }
+                if (connected == null && bestPartial != null) {
+                    val (ps, pr) = bestPartial
+                    Logger.info("vpn", "ни на одном сервере не работают все сервисы, беру лучший: ${ps.name} (${pr.summary()})")
+                    if (startCore(ps) == null) {
+                        Repo.tunnelDelay.value = pr.ms
+                        connected = ps
+                    }
+                    ensureActive()
                 }
                 if (connected == null && firstStarted != null) {
                     // Проверочные адреса могли быть просто недоступны: остаёмся на самом быстром,
@@ -177,7 +195,9 @@ class LetnieVpnService : VpnService() {
         monitor?.cancel()
         monitor = Repo.scope.launch {
             var bad = 0
+            var svcBad = 0
             var lastSearch = android.os.SystemClock.elapsedRealtime()
+            var lastHealth = lastSearch
             delay(2000)
             while (isActive) {
                 val smart = Repo.smart.value
@@ -196,14 +216,77 @@ class LetnieVpnService : VpnService() {
                         }
                     }
                 }
-                // Умный режим: раз в минуту перемеряем все серверы всех подписок и уходим на самый быстрый
                 val now = android.os.SystemClock.elapsedRealtime()
-                if (smart && bad == 0 && now - lastSearch >= SEARCH_EVERY_MS) {
+                // Умный режим: сервисы (YouTube, Telegram…) проверяются отдельно. Один сбой — перепроверка через 5 с,
+                // второй подряд — переезд на сервер, где всё работает.
+                val healthEvery = if (Repo.uiVisible) HEALTH_EVERY_MS else HEALTH_EVERY_BG_MS
+                if (smart && bad == 0 && (svcBad > 0 || now - lastHealth >= healthEvery)) {
+                    lastHealth = now
+                    val cur = Repo.allServers().firstOrNull { it.id == Repo.vpnServer.value }
+                    val r = probeServices()
+                    if (cur != null) markHealth(cur, r)
+                    if (r.allCritical || r.ok.isEmpty()) {
+                        // r.ok.isEmpty() — сети нет совсем, это дело базовой проверки трафика выше
+                        svcBad = 0
+                    } else {
+                        svcBad++
+                        Logger.info("vpn", "сервисы: ${r.summary()} ($svcBad)")
+                        if (svcBad >= 2) {
+                            svcBad = 0
+                            switchForServices(cur, r)
+                        }
+                    }
+                }
+                // Умный режим: раз в минуту перемеряем все серверы всех подписок и уходим на самый быстрый
+                if (smart && bad == 0 && svcBad == 0 && now - lastSearch >= SEARCH_EVERY_MS) {
                     lastSearch = now
                     if (!Repo.uiVisible) withTimeoutOrNull(6000) { Repo.pingAll(1500, quiet = true) }
                     upgrade()
                 }
-                delay(if (bad > 0) 1500L else if (Repo.uiVisible) 2500L else 15000L)
+                delay(if (bad > 0) 1500L else if (svcBad > 0) 5000L else if (Repo.uiVisible) 2500L else 15000L)
+            }
+        }
+    }
+
+    /**
+     * Сервисы не работают на текущем сервере. Пробуем самые быстрые из остальных и берём первый, где работают
+     * все важные сервисы. Если такого нет — тот, где работает больше всего, но только если он лучше текущего.
+     */
+    private suspend fun switchForServices(cur: Server?, curResult: ProbeResult) {
+        withTimeoutOrNull(6000) { Repo.pingAll(1500, quiet = true) }
+        val order = ranked().filter { it.id != cur?.id }.take(4)
+        Logger.info("vpn", "сервисы не работают (${curResult.summary()}), ищу другой сервер: " + order.joinToString { it.name })
+        var best: Pair<Server, ProbeResult>? = null
+        for (s in order) {
+            currentCoroutineContext().ensureActive()
+            if (startCore(s) != null) continue
+            currentCoroutineContext().ensureActive()
+            delay(500)
+            val r = probeServices()
+            currentCoroutineContext().ensureActive()
+            markHealth(s, r)
+            Logger.info("vpn", "${s.name}: ${r.summary()}")
+            if (r.allCritical) {
+                Repo.vpnServer.value = s.id
+                enterForeground(s.name)
+                Repo.tunnelDelay.value = r.ms
+                Logger.info("vpn", "переключено на ${s.name}: все сервисы работают")
+                return
+            }
+            if (r.ok.isNotEmpty() && (best == null || r.score > best.second.score)) best = s to r
+        }
+        val target = best?.takeIf { it.second.score > curResult.score }
+        val back = target?.first ?: cur
+        if (back != null) {
+            startCore(back)
+            currentCoroutineContext().ensureActive()
+            Repo.vpnServer.value = back.id
+            enterForeground(back.name)
+            if (target != null) {
+                Repo.tunnelDelay.value = target.second.ms
+                Logger.info("vpn", "полностью рабочего сервера нет, перешёл на лучший: ${back.name}")
+            } else {
+                Logger.info("vpn", "лучше текущего ничего нет, остаюсь на ${back.name}")
             }
         }
     }
@@ -226,17 +309,20 @@ class LetnieVpnService : VpnService() {
         if (startCore(cand) == null) {
             currentCoroutineContext().ensureActive()
             delay(600)
-            val ms = measure()
-            if (ms >= 0) {
+            val r = probeServices()
+            currentCoroutineContext().ensureActive()
+            markHealth(cand, r)
+            if (r.allCritical) {
                 Repo.vpnServer.value = cand.id
                 enterForeground(cand.name)
-                Repo.tunnelDelay.value = ms
-                Logger.info("vpn", "переключено на ${cand.name}, $ms мс")
+                Repo.tunnelDelay.value = r.ms
+                Logger.info("vpn", "переключено на ${cand.name}, ${r.ms} мс, сервисы: ${r.summary()}")
                 return
             }
+            Logger.info("vpn", "${cand.name} быстрее, но сервисы не все работают (${r.summary()})")
         }
         currentCoroutineContext().ensureActive()
-        Logger.info("vpn", "${cand.name} не подтвердил трафик, возвращаюсь на ${prev.name}")
+        Logger.info("vpn", "${cand.name} не подошёл, возвращаюсь на ${prev.name}")
         startCore(prev)
     }
 
@@ -291,7 +377,70 @@ class LetnieVpnService : VpnService() {
         val pg = Repo.pings.value
         val all = Repo.allServers()
         val alive = all.filter { (pg[it.id] ?: -1) > 0 }
-        return (alive.ifEmpty { all }).sortedBy { pg[it.id]?.takeIf { p -> p > 0 } ?: Int.MAX_VALUE }
+        // серверы, на которых недавно не работали важные сервисы, идут в конец — их пробуем в последнюю очередь
+        return (alive.ifEmpty { all }).sortedWith(
+            compareBy<Server>({ if (isBad(it)) 1 else 0 }, { pg[it.id]?.takeIf { p -> p > 0 } ?: Int.MAX_VALUE })
+        )
+    }
+
+    // ── проверка сервисов ──────────────────────────────────────────
+
+    private class Service(val name: String, val url: String, val critical: Boolean)
+
+    private class ProbeResult(
+        val ok: List<String>,
+        val failed: List<String>,
+        val failedCritical: List<String>,
+        val ms: Int,
+    ) {
+        val allCritical get() = ok.isNotEmpty() && failedCritical.isEmpty()
+        /** Важные сервисы весят больше обычных. */
+        val score: Int get() = SERVICES.filter { it.name in ok }.sumOf { if (it.critical) 10 else 1 }
+        fun summary(): String =
+            if (ok.isEmpty()) "ничего не отвечает"
+            else "работают: ${ok.joinToString()}" + if (failed.isEmpty()) "" else "; не работают: ${failed.joinToString()}"
+    }
+
+    /** Когда и с каким итогом сервер проверяли в последний раз. */
+    private val health = ConcurrentHashMap<String, Pair<Long, Boolean>>()
+
+    private fun markHealth(s: Server, r: ProbeResult) {
+        if (r.ok.isEmpty()) return // сети нет совсем — о сервере это ничего не говорит
+        health[s.id] = android.os.SystemClock.elapsedRealtime() to r.allCritical
+    }
+
+    private fun isBad(s: Server): Boolean {
+        val h = health[s.id] ?: return false
+        return !h.second && android.os.SystemClock.elapsedRealtime() - h.first < BAD_MEMORY_MS
+    }
+
+    /** Один запрос к адресу через туннель, с одной повторной попыткой. Задержка в мс или -1. */
+    private suspend fun probeOne(url: String): Int {
+        repeat(2) { attempt ->
+            val test = Repo.scope.async {
+                try {
+                    if (controller.isRunning) controller.measureDelay(url).toInt() else -1
+                } catch (e: Exception) {
+                    -1
+                }
+            }
+            val ms = withTimeoutOrNull(4500) { test.await() } ?: -1
+            if (ms >= 0) return ms.coerceAtLeast(1)
+            if (attempt == 0) delay(250)
+        }
+        return -1
+    }
+
+    /** Все сервисы из SERVICES проверяются одновременно настоящими запросами через текущий сервер. */
+    private suspend fun probeServices(): ProbeResult = coroutineScope {
+        val res = SERVICES.map { svc -> async { svc to probeOne(svc.url) } }.awaitAll()
+        val okList = res.filter { it.second >= 0 }
+        ProbeResult(
+            ok = okList.map { it.first.name },
+            failed = res.filter { it.second < 0 }.map { it.first.name },
+            failedCritical = res.filter { it.second < 0 && it.first.critical }.map { it.first.name },
+            ms = okList.map { it.second }.sorted().let { if (it.isEmpty()) -1 else it[it.size / 2] },
+        )
     }
 
     /** Один настоящий запрос через туннель. Возвращает задержку в мс или -1, если ответа нет. */
@@ -471,6 +620,23 @@ class LetnieVpnService : VpnService() {
             "https://www.gstatic.com/generate_204",
             "https://cp.cloudflare.com/generate_204",
         )
+        /**
+         * Какие сервисы должны работать через сервер. critical — без них сервер не годится (если есть лучше).
+         * Список можно менять: достаточно адреса, который отвечает 200 или 204.
+         */
+        private val SERVICES = listOf(
+            Service("YouTube", "https://www.youtube.com/generate_204", true),
+            Service("Telegram", "https://web.telegram.org/", true),
+            Service("Google", "https://www.gstatic.com/generate_204", true),
+            Service("Instagram", "https://www.instagram.com/", false),
+            Service("Discord", "https://discord.com/api/v9/gateway", false),
+            Service("Cloudflare", "https://cp.cloudflare.com/generate_204", false),
+        )
+        /** Как часто проверять сервисы на текущем сервере: при открытом приложении и в фоне. */
+        private const val HEALTH_EVERY_MS = 45_000L
+        private const val HEALTH_EVERY_BG_MS = 120_000L
+        /** Сколько помнить, что на сервере не работали важные сервисы. */
+        private const val BAD_MEMORY_MS = 10 * 60_000L
         /** Как часто в умном режиме искать сервер быстрее текущего. */
         private const val SEARCH_EVERY_MS = 60_000L
         private const val CHANNEL = "vpn"

@@ -159,6 +159,22 @@ object Repo {
         -1
     }
 
+    /** Один замер сервера с записью в pings. Одиночный сбой не сбрасывает показание: «—» только после двух подряд. */
+    private fun measureOne(s: Server, timeoutMs: Int) {
+        val ms = tcpPing(s.host, s.port, timeoutMs)
+        val value = if (ms < 0) {
+            val n = (fails[s.id] ?: 0) + 1
+            fails[s.id] = n
+            val prev = pings.value[s.id]
+            if (prev != null && prev > 0 && n < 2) prev else -1
+        } else {
+            fails.remove(s.id)
+            ms
+        }
+        pings.update { it + (s.id to value) }
+        lastPingAt = android.os.SystemClock.elapsedRealtime()
+    }
+
     suspend fun pingAll(timeoutMs: Int = 2500, quiet: Boolean = false) {
         pingMutex.withLock {
             val sem = Semaphore(12)
@@ -166,20 +182,7 @@ object Repo {
             coroutineScope {
                 list.map { s ->
                     async {
-                        sem.withPermit {
-                            val ms = tcpPing(s.host, s.port, timeoutMs)
-                            // одиночный сбой не сбрасывает показание: «—» только после двух подряд
-                            val value = if (ms < 0) {
-                                val n = (fails[s.id] ?: 0) + 1
-                                fails[s.id] = n
-                                val prev = pings.value[s.id]
-                                if (prev != null && prev > 0 && n < 2) prev else -1
-                            } else {
-                                fails.remove(s.id)
-                                ms
-                            }
-                            pings.update { it + (s.id to value) }
-                        }
+                        sem.withPermit { measureOne(s, timeoutMs) }
                     }
                 }.awaitAll()
             }
@@ -192,15 +195,35 @@ object Repo {
         scope.launch { pingAll() }
     }
 
-    /** Пинг в реальном времени: пока приложение на экране, серверы перемеряются каждые пару секунд. */
+    /**
+     * Пинг в реальном времени: пока приложение на экране, у каждого сервера свой независимый цикл замеров.
+     * Цифры обновляются по одной примерно раз в секунду и не ждут самый медленный сервер, как при общем проходе.
+     * Недоступные серверы перепроверяются реже.
+     */
     fun startLivePing() {
         uiVisible = true
         if (liveJob?.isActive == true) return
         liveJob = scope.launch {
+            val sem = Semaphore(8)
+            val loops = HashMap<String, Job>()
             while (isActive) {
-                pingAll(timeoutMs = 1500, quiet = true)
-                delay(1500)
+                val servers = allServers()
+                val alive = servers.map { it.id }.toSet()
+                loops.keys.filter { it !in alive }.forEach { loops.remove(it)?.cancel() }
+                servers.forEachIndexed { i, s ->
+                    if (loops[s.id]?.isActive != true) {
+                        loops[s.id] = launch {
+                            delay((i % 10) * 90L) // разводим старт, чтобы замеры не шли пачкой
+                            while (isActive) {
+                                sem.withPermit { measureOne(s, 1500) }
+                                delay(if (pings.value[s.id] == -1) 4000L else 1000L)
+                            }
+                        }
+                    }
+                }
+                delay(2000)
             }
+            loops.values.forEach { it.cancel() }
         }
     }
 
