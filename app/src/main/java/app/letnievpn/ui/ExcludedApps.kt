@@ -350,7 +350,7 @@ private fun SheetContent(modifier: Modifier) {
         val list = apps
         if (list != null) {
             LazyColumn(
-                Modifier.fillMaxSize().graphicsLayer { alpha = listAlpha },
+                Modifier.fillMaxSize().graphicsLayer { alpha = listAlpha }.topFade(96.dp) { fade },
                 state = listState,
                 contentPadding = PaddingValues(top = 68.dp, bottom = 24.dp)
             ) {
@@ -382,24 +382,6 @@ private fun SheetContent(modifier: Modifier) {
                 }
             }
         }
-
-        // полупрозрачный фейд под заголовком: список проглядывает сквозь него
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(96.dp)
-                .graphicsLayer { alpha = fade }
-                .background(
-                    Brush.verticalGradient(
-                        0.00f to p.surface.copy(alpha = 0.80f),
-                        0.45f to p.surface.copy(alpha = 0.72f),
-                        0.60f to p.surface.copy(alpha = 0.50f),
-                        0.75f to p.surface.copy(alpha = 0.28f),
-                        0.90f to p.surface.copy(alpha = 0.08f),
-                        1.00f to p.surface.copy(alpha = 0f),
-                    )
-                )
-        )
 
         Text(
             "Приложения без VPN",

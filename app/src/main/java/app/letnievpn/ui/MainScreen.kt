@@ -231,6 +231,7 @@ private fun Content(
         Column(
             Modifier
                 .fillMaxSize()
+                .topFade(top + 96.dp) { scroll.value / 90f }
                 .verticalScroll(scroll)
                 .padding(top = top + 56.dp, bottom = bottom + 28.dp, start = 12.dp, end = 12.dp)
         ) {
@@ -250,26 +251,6 @@ private fun Content(
                 onReconnect()
             }
         }
-
-        // растворение шапки при прокрутке: проявляется постепенно вместе со скроллом,
-        // а сам градиент плавный (кривая ease), без резкой границы
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(top + 96.dp)
-                .graphicsLayer { alpha = (scroll.value / 90f).coerceIn(0f, 1f) }
-                .background(
-                    Brush.verticalGradient(
-                        0.00f to p.bg,
-                        0.40f to p.bg,
-                        0.52f to p.bg.copy(alpha = 0.90f),
-                        0.64f to p.bg.copy(alpha = 0.65f),
-                        0.76f to p.bg.copy(alpha = 0.38f),
-                        0.88f to p.bg.copy(alpha = 0.14f),
-                        1.00f to p.bg.copy(alpha = 0f),
-                    )
-                )
-        )
 
         // шапка: слева смена темы, логотип и заголовок по центру, справа три точки с меню
         Box(
@@ -861,7 +842,8 @@ private fun SubsCard(
                             val n = res.getQuantityString(R.plurals.servers, shownCount, shownCount)
                             Text(
                                 if (sub.info.isBlank()) n else "$n · ${sub.info}",
-                                color = p.text2, fontSize = 12.sp, lineHeight = 16.sp
+                                color = p.text2, fontSize = 12.sp, lineHeight = 16.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis
                             )
                         }
                         Box(Modifier.graphicsLayer { rotationZ = rot.value }) { PolyIcon(CHEVRON, p.text2, 22.dp) }
@@ -1073,40 +1055,72 @@ private fun RollingNumber(value: Int, color: Color, fontSize: TextUnit, weight: 
 
 @Composable
 private fun RollingChar(ch: Char?, dir: Int, enter: Boolean, color: Color, fontSize: TextUnit, weight: FontWeight) {
-    var cur by remember { mutableStateOf(ch) }
-    var prev by remember { mutableStateOf<Char?>(null) }
-    var way by remember { mutableIntStateOf(if (dir == 0) 1 else dir) }
-    val t = remember { Animatable(if (enter) 0f else 1f) }
-    LaunchedEffect(ch) {
-        if (ch != cur) {
-            prev = cur
-            cur = ch
-            way = if (dir == 0) 1 else dir
-            t.snapTo(0f)
-        }
-        t.animateTo(1f, tween(260, easing = FastOutSlowInEasing))
-    }
     val style = TextStyle(color = color, fontSize = fontSize, fontWeight = weight, fontFeatureSettings = "tnum")
-    val c = cur
-    val pv = prev
-    Box(Modifier.clipToBounds(), contentAlignment = Alignment.Center) {
-        if (c != null) {
-            Text(
-                c.toString(), style = style, maxLines = 1,
-                modifier = Modifier.graphicsLayer {
-                    translationY = way * (1f - t.value) * size.height
-                    alpha = t.value
-                }
-            )
+    // последняя цифра в слоте: когда разряд исчезает, она ещё тает, а не пропадает рывком
+    var shown by remember { mutableStateOf(ch ?: '0') }
+    if (ch != null) shown = ch
+    val start = (ch ?: '0') - '0'
+    // позиция барабана в «развёрнутых» цифрах (7 → 8 → 9 → 10 → 11): так цифры идут по одной, как в одометре
+    val pos = remember { Animatable(start.toFloat()) }
+    var lo by remember { mutableIntStateOf(start) }
+    var hi by remember { mutableIntStateOf(start) }
+    // ширина и прозрачность разряда: новый разряд проявляется, лишний тает
+    val vis = remember { Animatable(if (ch == null || enter) 0f else 1f) }
+
+    LaunchedEffect(ch == null) {
+        vis.animateTo(if (ch == null) 0f else 1f, tween(220, easing = FastOutSlowInEasing))
+    }
+    LaunchedEffect(ch) {
+        if (ch == null) return@LaunchedEffect
+        val d = ch - '0'
+        val base = pos.value.roundToInt()
+        val curDigit = ((base % 10) + 10) % 10
+        val delta = when {
+            d == curDigit -> 0
+            dir >= 0 -> (d - curDigit + 10) % 10          // число растёт — крутим вверх через соседние цифры
+            else -> -((curDigit - d + 10) % 10)           // число падает — вниз
         }
-        if (pv != null && t.value < 1f) {
-            Text(
-                pv.toString(), style = style, maxLines = 1,
-                modifier = Modifier.graphicsLayer {
-                    translationY = -way * t.value * size.height
-                    alpha = 1f - t.value
-                }
-            )
+        val target = base + delta
+        lo = minOf(kotlin.math.floor(pos.value).toInt(), target)
+        hi = maxOf(kotlin.math.ceil(pos.value).toInt(), target)
+        pos.animateTo(
+            target.toFloat(),
+            tween((200 + 60 * abs(delta)).coerceAtMost(480), easing = FastOutSlowInEasing)
+        )
+        // анимация дошла до конца — сворачиваем барабан обратно к одной цифре
+        val norm = ((target % 10) + 10) % 10
+        pos.snapTo(norm.toFloat())
+        lo = norm
+        hi = norm
+    }
+
+    Box(
+        Modifier
+            .layout { m, c ->
+                val pl = m.measure(c)
+                val w = (pl.width * vis.value).roundToInt()
+                layout(w, pl.height) { pl.placeRelative(0, 0) }
+            }
+            .graphicsLayer { alpha = vis.value },
+        contentAlignment = Alignment.Center
+    ) {
+        // невидимая «0» задаёт размер слота
+        Text("0", style = style.copy(color = Color.Transparent), maxLines = 1)
+        if (ch == null) {
+            Text(shown.toString(), style = style, maxLines = 1)
+        } else {
+            for (k in lo..hi) {
+                val digit = (((k % 10) + 10) % 10).toString()
+                Text(
+                    digit, style = style, maxLines = 1,
+                    modifier = Modifier.graphicsLayer {
+                        val off = k - pos.value
+                        translationY = off * size.height
+                        // соседние цифры плавно гаснут, ничего не обрезается
+                        alpha = (1f - abs(off)).coerceIn(0f, 1f)
+                    }
+                )
+            }
         }
     }
 }
