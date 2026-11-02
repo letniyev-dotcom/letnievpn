@@ -2,6 +2,7 @@ package app.letnievpn.ui
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -84,6 +85,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.letnievpn.R
+import app.letnievpn.data.Logger
 import app.letnievpn.data.Repo
 import app.letnievpn.data.Server
 import app.letnievpn.data.Sub
@@ -191,7 +193,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                 )
         )
 
-        // шапка: логотип и заголовок вместе по центру, справа «+»
+        // шапка: слева «скачать журнал», логотип и заголовок по центру, справа «+»
         Box(
             Modifier
                 .fillMaxWidth()
@@ -213,6 +215,32 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                     fontWeight = FontWeight.Medium,
                     letterSpacing = 0.1.sp
                 )
+            }
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 4.dp)
+                    .size(48.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        // скачать журнал: сохраняется в «Загрузки», внутри нет ключей и адресов серверов
+                        Repo.scope.launch {
+                            val where = Logger.export(ctx)
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(
+                                    ctx,
+                                    if (where != null) "Журнал сохранён: $where" else "Не удалось сохранить журнал",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                PolyIcon(DOWNLOAD_ARROW, p.primary, 24.dp)
+                PolyIcon(DOWNLOAD_BAR, p.primary, 24.dp)
             }
             Box(
                 Modifier
@@ -618,6 +646,12 @@ private fun ServerRow(s: Server, selected: Boolean, best: Boolean, ping: Int?, o
 private val PLUS = listOf(
     19f to 13f, 13f to 13f, 13f to 19f, 11f to 19f, 11f to 13f, 5f to 13f,
     5f to 11f, 11f to 11f, 11f to 5f, 13f to 5f, 13f to 11f, 19f to 11f
+)
+private val DOWNLOAD_ARROW = listOf(
+    19f to 9f, 15f to 9f, 15f to 3f, 9f to 3f, 9f to 9f, 5f to 9f, 12f to 16f
+)
+private val DOWNLOAD_BAR = listOf(
+    5f to 18f, 5f to 20f, 19f to 20f, 19f to 18f
 )
 private val CHEVRON = listOf(
     7.41f to 8.59f, 12f to 13.17f, 16.59f to 8.59f, 18f to 10f, 12f to 16f, 6f to 10f

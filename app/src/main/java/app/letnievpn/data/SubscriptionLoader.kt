@@ -110,7 +110,12 @@ object SubscriptionLoader {
             t.startsWith("<") -> "сервер вернул веб-страницу, а не подписку"
             t.startsWith("{") || t.startsWith("[") -> "формат JSON-конфиг (пока не поддерживается)"
             t.contains("proxies:") -> "формат Clash/YAML (пока не поддерживается)"
-            else -> "в ответе нет ссылок vless/vmess/trojan/ss (длина ${t.length})"
+            else -> {
+                val first = t.lineSequence().first().trim()
+                val scheme = Regex("^([a-zA-Z][a-zA-Z0-9+.-]{0,15})://").find(first)?.groupValues?.get(1)
+                if (scheme != null) "ссылки неизвестного типа «$scheme://» (длина ${t.length})"
+                else "в ответе нет ссылок vless/vmess/trojan/ss (длина ${t.length})"
+            }
         }
     }
 
