@@ -48,6 +48,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // статус-бар и панель навигации полностью прозрачные, без серой подложки
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+        }
         // тихо обновляем подписки и пинги при открытии
         Repo.refreshSubscriptions()
         if (intent?.action == ACTION_CONNECT) connectRequest.value = true
