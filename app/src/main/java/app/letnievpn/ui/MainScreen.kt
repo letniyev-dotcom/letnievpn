@@ -157,7 +157,6 @@ private fun Modifier.glass(
         shape
     )
 
-@OptIn(ExperimentalLayoutApi::class)
 /** Кнопка включения: стекло (объём), плоская заливка или кольцо — по выбору в «Оформлении». */
 private fun Modifier.btnSurface(p: Palette, a: Color, b: Color, shadow: Color, flat: Color): Modifier = when (p.btn) {
     1 -> this.background(flat, CircleShape)
@@ -297,6 +296,7 @@ private fun LookHost(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar:
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Content(
     onPower: () -> Unit,
