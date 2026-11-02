@@ -1,0 +1,84 @@
+package app.letnievpn
+
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.VpnService
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
+import app.letnievpn.data.Repo
+import app.letnievpn.data.VpnStatus
+import app.letnievpn.ui.MainScreen
+import app.letnievpn.vpn.LetnieVpnService
+
+class MainActivity : ComponentActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        // тихо обновляем подписки и пинги при открытии
+        Repo.refreshSubscriptions()
+
+        setContent {
+            // 0 — ничего не ждём; иначе после выдачи разрешений включаем VPN
+            var pendingStart by remember { mutableStateOf(false) }
+
+            val vpnPermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.StartActivityForResult()
+            ) { r ->
+                if (r.resultCode == RESULT_OK && pendingStart) LetnieVpnService.start(this)
+                pendingStart = false
+            }
+            val notifPermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) {
+                // уведомление нужно только для красоты: VPN работает и без него
+                val intent: Intent? = VpnService.prepare(this)
+                if (intent == null) {
+                    LetnieVpnService.start(this)
+                    pendingStart = false
+                } else {
+                    vpnPermission.launch(intent)
+                }
+            }
+
+            fun startVpn() {
+                pendingStart = true
+                val needNotif = Build.VERSION.SDK_INT >= 33 &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                    PackageManager.PERMISSION_GRANTED
+                if (needNotif) {
+                    notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    val intent: Intent? = VpnService.prepare(this)
+                    if (intent == null) {
+                        LetnieVpnService.start(this)
+                        pendingStart = false
+                    } else {
+                        vpnPermission.launch(intent)
+                    }
+                }
+            }
+
+            MainScreen(
+                onPower = {
+                    if (Repo.vpn.value == VpnStatus.OFF) startVpn() else LetnieVpnService.stop(this)
+                },
+                onReconnect = {
+                    // сменили сервер или режим во время работы — переподключаем
+                    if (Repo.vpn.value != VpnStatus.OFF) LetnieVpnService.start(this)
+                },
+            )
+        }
+    }
+}
