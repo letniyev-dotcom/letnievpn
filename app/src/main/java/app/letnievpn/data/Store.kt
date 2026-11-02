@@ -25,6 +25,16 @@ class Store(context: Context) {
         get() = sp.getBoolean("desired", false)
         set(v) = sp.edit().putBoolean("desired", v).apply()
 
+    /** Постоянный идентификатор устройства (HWID): панели подписок используют его для лимита устройств. */
+    val hwid: String
+        get() {
+            val k = sp.getString("hwid", null)
+            if (k != null) return k
+            val n = UUID.randomUUID().toString().replace("-", "").take(16)
+            sp.edit().putString("hwid", n).apply()
+            return n
+        }
+
     val xudpKey: String
         get() {
             val k = sp.getString("xudp", null)

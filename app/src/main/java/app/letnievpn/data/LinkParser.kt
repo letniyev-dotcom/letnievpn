@@ -20,7 +20,6 @@ class Proxy(
 
 object LinkParser {
     private val schemes = listOf("vless://", "vmess://", "trojan://", "ss://")
-    private val supportedNets = setOf("tcp", "ws", "httpupgrade", "xhttp", "h2", "http", "grpc")
 
     fun isLink(s: String): Boolean = schemes.any { s.startsWith(it, ignoreCase = true) }
 
@@ -33,8 +32,8 @@ object LinkParser {
             l.startsWith("ss://", true) -> parseSs(l)
             else -> null
         }
-        val net = (p?.q?.get("type") ?: "tcp").lowercase()
-        if (p == null || net !in supportedNets) null else p
+        // Неподдерживаемые транспорты не отбрасываем: сервер остаётся в списке (его просто не выберет умный режим по пингу)
+        p
     } catch (e: Exception) {
         null
     }

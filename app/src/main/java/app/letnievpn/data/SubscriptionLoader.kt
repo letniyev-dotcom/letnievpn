@@ -13,43 +13,83 @@ import java.util.UUID
 /** Загружает подписку по ссылке (список ссылок vless/vmess/trojan/ss, обычно в base64). */
 object SubscriptionLoader {
 
-    suspend fun fetch(url: String, keepId: String? = null): Sub? = withContext(Dispatchers.IO) {
+    /** Причина последней неудачи (без ссылок и ключей) — показывается в пустом списке. */
+    @Volatile
+    var lastError: String = ""
+
+    // Панели отдают разный формат в зависимости от User-Agent: пробуем несколько привычных клиентов
+    private val agents = listOf("Happ/4.9.0", "v2rayNG/1.10.0", "v2rayN/7.0.0")
+
+    private class Raw(val code: Int, val body: String, val title: String?, val userInfo: String?)
+
+    private fun get(url: String, agent: String): Raw {
+        val c = URL(url).openConnection() as HttpURLConnection
         try {
-            val c = URL(url).openConnection() as HttpURLConnection
             c.connectTimeout = 15000
             c.readTimeout = 20000
             c.instanceFollowRedirects = true
-            c.setRequestProperty("User-Agent", "v2rayNG/1.10.0 letnievpn")
+            c.setRequestProperty("User-Agent", agent)
             c.setRequestProperty("Accept", "*/*")
-            val body = c.inputStream.bufferedReader().use { it.readText() }
-            val title = c.getHeaderField("profile-title")
-            val userInfo = c.getHeaderField("subscription-userinfo")
+            // Те же заголовки устройства, что отправляет Happ: панели с лимитом устройств без них отказывают
+            c.setRequestProperty("x-hwid", Repo.hwid())
+            c.setRequestProperty("x-device-os", "Android")
+            c.setRequestProperty("x-ver-os", android.os.Build.VERSION.RELEASE ?: "")
+            c.setRequestProperty("x-device-model", android.os.Build.MODEL ?: "")
+            val code = c.responseCode
+            val stream = if (code in 200..299) c.inputStream else c.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            return Raw(code, body, c.getHeaderField("profile-title"), c.getHeaderField("subscription-userinfo"))
+        } finally {
             c.disconnect()
-
-            val links = extractLinks(body)
-            if (links.isEmpty()) return@withContext null
-            val servers = links.mapNotNull { LinkParser.toServer(it) }.distinctBy { it.id }
-            if (servers.isEmpty()) return@withContext null
-
-            val name = decodeTitle(title)
-                ?: runCatching { URL(url).host.removePrefix("www.") }.getOrNull()
-                ?: "Подписка"
-            Sub(
-                id = keepId ?: UUID.nameUUIDFromBytes(url.toByteArray()).toString().take(8),
-                name = name,
-                url = url,
-                info = formatInfo(userInfo),
-                servers = servers,
-            )
-        } catch (e: Exception) {
-            null
         }
+    }
+
+    suspend fun fetch(url: String, keepId: String? = null): Sub? = withContext(Dispatchers.IO) {
+        var reason = ""
+        for (agent in agents) {
+            try {
+                val r = get(url, agent)
+                if (r.code !in 200..299) {
+                    reason = "сервер ответил кодом ${r.code}"
+                    continue
+                }
+                val links = extractLinks(r.body)
+                if (links.isEmpty()) {
+                    reason = describe(r.body)
+                    continue
+                }
+                val servers = links.mapNotNull { LinkParser.toServer(it) }.distinctBy { it.id }
+                if (servers.isEmpty()) {
+                    reason = "ссылки есть (${links.size}), но ни одна не разобралась: ${links.map { it.substringBefore("://") }.distinct().joinToString()}"
+                    continue
+                }
+                val name = decodeTitle(r.title)
+                    ?: runCatching { URL(url).host.removePrefix("www.") }.getOrNull()
+                    ?: "Подписка"
+                lastError = ""
+                return@withContext Sub(
+                    id = keepId ?: UUID.nameUUIDFromBytes(url.toByteArray()).toString().take(8),
+                    name = name,
+                    url = url,
+                    info = formatInfo(r.userInfo),
+                    servers = servers,
+                )
+            } catch (e: Exception) {
+                reason = "ошибка сети: ${e.javaClass.simpleName} ${scrub(e.message)}"
+            }
+        }
+        lastError = reason.ifBlank { "не удалось загрузить подписку" }
+        null
     }
 
     /** Ссылки, вставленные из буфера прямо списком (без адреса подписки). */
     fun fromLinks(text: String): Sub? {
         val servers = extractLinks(text).mapNotNull { LinkParser.toServer(it) }.distinctBy { it.id }
-        if (servers.isEmpty()) return null
+        if (servers.isEmpty()) {
+            lastError = "в буфере нет ни одной рабочей ссылки"
+            return null
+        }
+        lastError = ""
         return Sub(
             id = "clip-" + UUID.nameUUIDFromBytes(text.trim().toByteArray()).toString().take(8),
             name = "Из буфера",
@@ -58,6 +98,21 @@ object SubscriptionLoader {
             servers = servers,
         )
     }
+
+    /** Что за ответ пришёл, если в нём нет ссылок. Содержимое не показываем — там ключи. */
+    private fun describe(body: String): String {
+        val t = body.trimStart()
+        return when {
+            t.isEmpty() -> "сервер вернул пустой ответ"
+            t.startsWith("<") -> "сервер вернул веб-страницу, а не подписку"
+            t.startsWith("{") || t.startsWith("[") -> "формат JSON-конфиг (пока не поддерживается)"
+            t.contains("proxies:") -> "формат Clash/YAML (пока не поддерживается)"
+            else -> "в ответе нет ссылок vless/vmess/trojan/ss (длина ${t.length})"
+        }
+    }
+
+    private fun scrub(m: String?): String =
+        (m ?: "").replace(Regex("https?://\\S+"), "<url>").take(80)
 
     private fun extractLinks(body: String): List<String> {
         fun lines(t: String) = t.lineSequence().map { it.trim() }.filter { LinkParser.isLink(it) }.toList()

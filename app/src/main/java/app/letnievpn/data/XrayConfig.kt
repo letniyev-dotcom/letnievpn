@@ -116,7 +116,7 @@ object XrayConfig {
     private fun stream(p: Proxy): JSONObject {
         val q = p.q
         val domain = if (isIp(p.host)) null else p.host
-        val net = (q["type"] ?: "tcp").lowercase().let { if (it == "http") "h2" else it }
+        val net = (q["type"] ?: "tcp").lowercase().let { if (it == "http") "h2" else if (it == "splithttp") "xhttp" else it }
         val host = q["host"].orEmpty()
         val path = q["path"]?.ifBlank { null }
         val s = JSONObject().put("network", net)

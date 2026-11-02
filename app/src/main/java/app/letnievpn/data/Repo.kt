@@ -48,6 +48,11 @@ object Repo {
 
     fun xudpKey(): String = store!!.xudpKey
 
+    fun hwid(): String = store?.hwid ?: ""
+
+    /** Причина последней неудачной загрузки подписки (для пустого списка). */
+    val lastError = MutableStateFlow("")
+
     fun allServers(): List<Server> = subs.value.flatMap { it.servers }
 
     /** Сервер с самым низким пингом из всех подписок. */
@@ -124,7 +129,10 @@ object Repo {
     /** Вставка из буфера обмена: ссылка на подписку или список ссылок. Ошибки молча игнорируются. */
     suspend fun addFromText(raw: String): Boolean {
         val text = raw.trim()
-        if (text.isEmpty()) return false
+        if (text.isEmpty()) {
+            lastError.value = "буфер обмена пуст"
+            return false
+        }
         val first = text.lineSequence().first().trim()
         val sub = when {
             first.startsWith("http://", true) || first.startsWith("https://", true) ->
@@ -132,7 +140,12 @@ object Repo {
             text.lineSequence().any { LinkParser.isLink(it.trim()) } ->
                 SubscriptionLoader.fromLinks(text)
             else -> null
-        } ?: return false
+        }
+        if (sub == null) {
+            lastError.value = SubscriptionLoader.lastError.ifBlank { "не удалось добавить подписку" }
+            return false
+        }
+        lastError.value = ""
         subs.update { list -> listOf(sub) + list.filterNot { it.id == sub.id } }
         persist()
         pingAll()

@@ -120,6 +120,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
     val pings by Repo.pings.collectAsState()
     val status by Repo.vpn.collectAsState()
     val vpnServer by Repo.vpnServer.collectAsState()
+    val addError by Repo.lastError.collectAsState()
 
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -149,7 +150,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
                 onReconnect()
             }
             Spacer(Modifier.height(12.dp))
-            SubsCard(subs, best, current, pings) { id ->
+            SubsCard(subs, best, current, pings, addError) { id ->
                 Repo.select(id)
                 onReconnect()
             }
@@ -413,6 +414,7 @@ private fun SubsCard(
     best: Server?,
     current: Server?,
     pings: Map<String, Int>,
+    error: String,
     onPick: (String) -> Unit,
 ) {
     val p = LocalPalette.current
@@ -433,6 +435,14 @@ private fun SubsCard(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 28.dp)
             )
+            if (error.isNotBlank()) {
+                Text(
+                    "Не добавилось: $error",
+                    color = p.primary, fontSize = 13.sp, lineHeight = 18.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp)
+                )
+            }
         }
         subs.forEach { sub ->
             val closed = shut[sub.id] == true
