@@ -38,8 +38,14 @@ object Repo {
     val subs = MutableStateFlow<List<Sub>>(emptyList())
     val smart = MutableStateFlow(true)
 
-    /** Выбранная вручную тема: true — тёмная, false — светлая, null — как в системе. */
-    val themeDark = MutableStateFlow<Boolean?>(null)
+    /** Тема: -1 — как в системе, 0 — светлая, 1 — тёмная, 2 — ночная. */
+    val themeMode = MutableStateFlow(-1)
+
+    /** Свой акцентный цвет (ARGB); 0 — по умолчанию у темы. */
+    val accent = MutableStateFlow(0)
+
+    /** Вид кнопки включения: 0 — стекло, 1 — плоская, 2 — кольцо. */
+    val btnStyle = MutableStateFlow(0)
 
     /** Приложения-исключения: их трафик идёт мимо VPN (применяется при следующем подключении). */
     val excluded = MutableStateFlow<Set<String>>(emptySet())
@@ -82,7 +88,9 @@ object Repo {
         store = s
         subs.value = SubJson.fromJson(s.subsJson)
         smart.value = s.smart
-        themeDark.value = when (s.theme) { 0 -> false; 1 -> true; else -> null }
+        themeMode.value = s.theme
+        accent.value = s.accent
+        btnStyle.value = s.btn
         excluded.value = s.excluded
         selected.value = s.selected
     }
@@ -119,9 +127,20 @@ object Repo {
         store?.excluded = n
     }
 
+    /** Быстрое переключение светлая ↔ тёмная (кнопка слева в шапке). */
     fun setThemeDark(v: Boolean) {
-        themeDark.value = v
+        themeMode.value = if (v) 1 else 0
         store?.theme = if (v) 1 else 0
+    }
+
+    /** Применить экран «Оформление»: тема, акцент и вид кнопки сразу и в хранилище. */
+    fun setLook(mode: Int, accentArgb: Int, btn: Int) {
+        themeMode.value = mode
+        accent.value = accentArgb
+        btnStyle.value = btn
+        store?.theme = mode
+        store?.accent = accentArgb
+        store?.btn = btn
     }
 
     fun setSmart(v: Boolean) {

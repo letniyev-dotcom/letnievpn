@@ -1,6 +1,14 @@
 package app.letnievpn.ui
 
 import android.content.ClipboardManager
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.TransformOrigin
+import kotlin.math.abs
 import android.content.Context
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -122,7 +130,7 @@ fun MainScreen(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: (Stri
     // размер шрифта не раздуваем системным масштабом — иначе блоки выходят громоздкими
     val d = LocalDensity.current
     CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = minOf(d.fontScale, 1f))) {
-        LetnieTheme { Content(onPower, onReconnect, onPickAvatar) }
+        LetnieTheme { LookHost(onPower, onReconnect, onPickAvatar) }
     }
 }
 
@@ -150,8 +158,153 @@ private fun Modifier.glass(
     )
 
 @OptIn(ExperimentalLayoutApi::class)
+/** Кнопка включения: стекло (объём), плоская заливка или кольцо — по выбору в «Оформлении». */
+private fun Modifier.btnSurface(p: Palette, a: Color, b: Color, shadow: Color, flat: Color): Modifier = when (p.btn) {
+    1 -> this.background(flat, CircleShape)
+    2 -> this.border(3.dp, p.primary, CircleShape)
+    else -> this.glass(p, CircleShape, a, b, 14.dp, shadow, flat)
+}
+
+/**
+ * Экран приложения и «Оформление» в одном: приложение уменьшается в карточку, по бокам такие же карточки
+ * остальных тем. Листаем пальцем или нажимаем на карточку; внизу — тема, акцент и вид кнопки.
+ * «Применить» сохраняет, «Отмена» возвращает всё как было. Карточки-превью — это то же самое приложение,
+ * только в другой палитре и без нажатий.
+ */
 @Composable
-private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: (String) -> Unit) {
+private fun LookHost(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: (String) -> Unit) {
+    val p = LocalPalette.current
+    val accent by Repo.accent.collectAsState()
+    val btn by Repo.btnStyle.collectAsState()
+    val scope = rememberCoroutineScope()
+    val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val nav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+    var look by remember { mutableStateOf(false) }
+    var sel by remember { mutableIntStateOf(p.kind) }
+    var dAccent by remember { mutableIntStateOf(accent) }
+    var dBtn by remember { mutableIntStateOf(btn) }
+    var tab by remember { mutableIntStateOf(0) }
+    val ap = remember { Animatable(0f) }
+    val selPos = remember { Animatable(p.kind.toFloat()) }
+    val ease = remember { CubicBezierEasing(0.16f, 1f, 0.3f, 1f) }
+    // пока идёт анимация или экран открыт, рисуем все три карточки
+    val showAll by remember { derivedStateOf { look || ap.value > 0.001f } }
+
+    LaunchedEffect(look) { ap.animateTo(if (look) 1f else 0f, tween(650, easing = ease)) }
+    LaunchedEffect(sel) { selPos.animateTo(sel.toFloat(), tween(450, easing = ease)) }
+
+    fun open() {
+        sel = p.kind
+        dAccent = accent
+        dBtn = btn
+        tab = 0
+        scope.launch { selPos.snapTo(p.kind.toFloat()) }
+        look = true
+    }
+
+    fun close(apply: Boolean) {
+        if (apply) {
+            Repo.setLook(if (sel == p.kind) Repo.themeMode.value else sel, dAccent, dBtn)
+        } else {
+            dAccent = accent
+            dBtn = btn
+            sel = p.kind
+        }
+        look = false
+    }
+
+    BackHandler(look) { close(false) }
+
+    Box(Modifier.fillMaxSize().drawBehind { drawRect(lerp(p.bg, p.back, ap.value)) }) {
+        // текущая тема рисуется последней, поверх остальных, как настоящий экран
+        val order = (0..2).filter { it != p.kind } + p.kind
+        order.forEach { i ->
+            if (i == p.kind || showAll) key(i) {
+                val pp = remember(i, dAccent, dBtn) { paletteOf(i, dAccent, dBtn) }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            val k = ap.value
+                            val w = size.width
+                            val h = size.height
+                            val s = 1f - 0.4f * k
+                            transformOrigin = TransformOrigin(0f, 0f)
+                            scaleX = s
+                            scaleY = s
+                            translationX = k * (w * 0.2f + (i - selPos.value) * w * 0.6454f)
+                            translationY = k * maxOf(h * 0.135f, (top + 64.dp).toPx())
+                            val want = if (i == sel) 1f else 0.7f
+                            alpha = (if (i == p.kind) 1f else k) * (1f + (want - 1f) * k)
+                            shape = RoundedCornerShape((57f * k).dp)
+                            clip = true
+                        }
+                ) {
+                    CompositionLocalProvider(LocalPalette provides pp) {
+                        Content(onPower, onReconnect, onPickAvatar, i == p.kind) { open() }
+                    }
+                }
+            }
+        }
+
+        if (showAll) {
+            val cp = remember(p.kind, dAccent, dBtn) { paletteOf(p.kind, dAccent, dBtn) }
+            CompositionLocalProvider(LocalPalette provides cp) {
+                LookChrome(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = ap.value }
+                        // нажатие по карточке выбирает её (пока экран закрывается — нажатия просто гасятся)
+                        .pointerInput(Unit) {
+                            detectTapGestures { o ->
+                                if (!look) return@detectTapGestures
+                                val w = size.width.toFloat()
+                                val ct = maxOf(size.height * 0.135f, (top + 64.dp).toPx())
+                                if (o.y in ct..(ct + 0.6f * size.height)) {
+                                    for (i in 0..2) {
+                                        val left = w * 0.2f + (i - selPos.value) * w * 0.6454f
+                                        if (o.x in left..(left + 0.6f * w)) sel = i
+                                    }
+                                }
+                            }
+                        }
+                        // листание пальцем
+                        .pointerInput(Unit) {
+                            var acc = 0f
+                            detectHorizontalDragGestures(
+                                onDragStart = { acc = 0f },
+                                onDragEnd = {
+                                    if (look && abs(acc) > 40.dp.toPx()) sel = (sel + if (acc < 0) 1 else -1).coerceIn(0, 2)
+                                },
+                            ) { _, dx -> acc += dx }
+                        },
+                    top = top,
+                    nav = nav,
+                    sel = sel,
+                    tab = tab,
+                    accent = dAccent,
+                    btn = dBtn,
+                    onCancel = { if (look) close(false) },
+                    onApply = { if (look) close(true) },
+                    onTab = { tab = it },
+                    onSel = { sel = it },
+                    onAccent = { dAccent = it },
+                    onBtn = { dBtn = it },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun Content(
+    onPower: () -> Unit,
+    onReconnect: () -> Unit,
+    onPickAvatar: (String) -> Unit,
+    interactive: Boolean,
+    onLook: () -> Unit,
+) {
     val p = LocalPalette.current
     val ctx = LocalContext.current
 
@@ -289,7 +442,8 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
             }
         }
 
-        BoxScopeHeaderMenu(menuMode, { menuMode = it }) {
+        // у карточек-превью на экране «Оформление» меню не нужно
+        if (interactive) BoxScopeHeaderMenu(menuMode, { menuMode = it }, onLook) {
             // «Добавить подписку»: молча берём из буфера обмена, без сообщений и всплывашек
             val text = readClipboard(ctx)
             if (text.isNotBlank()) Repo.scope.launch { Repo.addFromText(text) }
@@ -346,7 +500,7 @@ private fun PowerBlock(
             Box(
                 Modifier
                     .size(132.dp)
-                    .glass(p, CircleShape, a, b, 14.dp, shadow, flat)
+                    .btnSurface(p, a, b, shadow, flat)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -354,7 +508,7 @@ private fun PowerBlock(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                PowerIcon(iconColor, 50.dp)
+                PowerIcon(if (p.btn == 2) p.primary else iconColor, 50.dp)
             }
             // кольцо загрузки: плавно появляется вокруг кнопки и исчезает после подключения
             if (ringAlpha > 0.01f) Ring(p.primary, ringAlpha)
@@ -421,7 +575,7 @@ private fun Ring(color: Color, alpha: Float) {
 }
 
 @Composable
-private fun PowerIcon(color: Color, size: Dp) {
+internal fun PowerIcon(color: Color, size: Dp) {
     Canvas(Modifier.size(size)) {
         val s = this.size.width / 24f
         val w = 2.2f * s

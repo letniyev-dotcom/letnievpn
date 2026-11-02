@@ -194,7 +194,7 @@ private fun menuGeo(d: Density, w: Dp, h: Dp, top: Dp, nav: Dp): MenuGeo = with(
  * Изменения исключений вступают в силу при следующем подключении.
  */
 @Composable
-fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onAdd: () -> Unit) {
+fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onLook: () -> Unit, onAdd: () -> Unit) {
     val p = LocalPalette.current
     val ctx = LocalContext.current
     val d = LocalDensity.current
@@ -285,9 +285,9 @@ fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onAdd: () -> Unit) {
                     MenuItem("Исключения", mode == 1, { AppsIcon(p.primary, 24.dp) }) {
                         onMode(2)
                     }
-                    // пока ни к чему не подключено
-                    MenuItem("Оформление", mode == 1, { PaletteIcon(p.text2, 24.dp) }) {
+                    MenuItem("Оформление", mode == 1, { PaletteIcon(p.primary, 24.dp) }) {
                         onMode(0)
+                        onLook()
                     }
                 }
 
