@@ -22,6 +22,8 @@ import app.letnievpn.data.VpnStatus
 import app.letnievpn.data.XrayConfig
 import go.Seq
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.async
@@ -41,8 +43,11 @@ class LetnieVpnService : VpnService() {
 
     private var tun: ParcelFileDescriptor? = null
     private var job: Job? = null
-    private var watch: Job? = null
-    private var probe: Job? = null
+    /** Следит за трафиком и при сбое переключает сервер (см. startMonitor). */
+    private var monitor: Job? = null
+
+    /** Ядро одно, а запускать его могут из разных корутин: все запуски и остановки идут под замком. */
+    private val coreLock = Any()
 
     private val callback = object : CoreCallbackHandler {
         override fun startup(): Long = 0
@@ -81,8 +86,7 @@ class LetnieVpnService : VpnService() {
 
     override fun onDestroy() {
         job?.cancel()
-        watch?.cancel()
-        probe?.cancel()
+        monitor?.cancel()
         stopCore()
         closeTun()
         Repo.tunnelDelay.value = -1
@@ -95,7 +99,7 @@ class LetnieVpnService : VpnService() {
 
     private fun connect() {
         job?.cancel()
-        watch?.cancel()
+        monitor?.cancel()
         Repo.vpn.value = VpnStatus.CONNECTING
         Repo.connError.value = ""
         job = Repo.scope.launch {
@@ -105,32 +109,57 @@ class LetnieVpnService : VpnService() {
                     fail("нет серверов — добавьте подписку")
                     return@launch
                 }
-                Logger.info("vpn", "кандидаты: " + order.take(3).joinToString { "${it.name} ${Repo.pings.value[it.id] ?: "?"} мс" })
+                Logger.info("vpn", "кандидаты: " + order.take(4).joinToString { "${it.name} ${Repo.pings.value[it.id]?.takeIf { p -> p > 0 } ?: "—"} мс" })
                 ensureTun()
-                // В ручном режиме — только выбранный сервер, в умном — до трёх самых быстрых
-                val tries = if (Repo.smart.value) order.take(3) else order.take(1)
+                val smart = Repo.smart.value
+                // Ручной режим — только выбранный сервер. Умный — до четырёх самых быстрых,
+                // и «Подключено» показываем только когда через сервер реально пошёл трафик.
+                val tries = if (smart) order.take(4) else order.take(1)
                 var connected: Server? = null
+                var firstStarted: Server? = null
                 var err = ""
                 for (s in tries) {
                     val e = startCore(s)
-                    if (e == null) {
+                    ensureActive()
+                    if (e != null) {
+                        Logger.info("vpn", "${s.name}: не запустился — $e")
+                        err = e
+                        continue
+                    }
+                    if (firstStarted == null) firstStarted = s
+                    if (!smart) {
                         connected = s
                         break
                     }
-                    err = e
+                    delay(400) // даём туннелю подняться
+                    val ms = measure()
+                    ensureActive()
+                    if (ms >= 0) {
+                        Logger.info("vpn", "${s.name}: трафик идёт, ${ms} мс")
+                        Repo.tunnelDelay.value = ms
+                        connected = s
+                        break
+                    }
+                    Logger.info("vpn", "${s.name}: трафик не идёт, пробую следующий")
+                    err = "через ${s.name} нет трафика"
+                }
+                if (connected == null && firstStarted != null) {
+                    // Проверочные адреса могли быть просто недоступны: остаёмся на самом быстром,
+                    // а монитор продолжит проверять и при необходимости переключит.
+                    Logger.info("vpn", "ни один сервер не подтвердил трафик — остаюсь на ${firstStarted.name}")
+                    if (startCore(firstStarted) == null) connected = firstStarted
+                    ensureActive()
                 }
                 if (connected == null) {
-                    fail(err)
+                    fail(err.ifBlank { "не удалось запустить ни один сервер" })
                     return@launch
                 }
-                // Сразу показываем «Подключено»; работоспособность проверяем фоном (см. watchdog)
                 Logger.info("vpn", "подключено: ${connected.name}")
                 Repo.vpnServer.value = connected.id
                 Repo.vpn.value = VpnStatus.ON
                 enterForeground(connected.name)
                 Repo.refreshPings()
-                startProbe()
-                if (Repo.smart.value) watchdog(order, connected)
+                startMonitor()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -140,42 +169,105 @@ class LetnieVpnService : VpnService() {
     }
 
     /**
-     * Умное подключение: если через выбранный сервер трафик не идёт, переключаемся
-     * на следующий по пингу. Проверка идёт фоном, чтобы не задерживать подключение.
+     * Постоянный контроль, пока VPN включён. Раз в несколько секунд через туннель идёт настоящий запрос.
+     * В умном режиме два сбоя подряд запускают восстановление (см. recover). В ручном сервер не меняется,
+     * задержка только показывается на экране.
      */
-    private fun watchdog(order: List<Server>, first: Server) {
-        watch?.cancel()
-        watch = Repo.scope.launch {
-            val others = order.filter { it.id != first.id }.take(2)
-            kotlinx.coroutines.delay(2500)
-            if (verify()) return@launch
-            for (next in others) {
-                if (startCore(next) != null) continue
-                Repo.vpnServer.value = next.id
-                enterForeground(next.name)
-                kotlinx.coroutines.delay(2500)
-                if (verify()) return@launch
+    private fun startMonitor() {
+        monitor?.cancel()
+        monitor = Repo.scope.launch {
+            var bad = 0
+            delay(2000)
+            while (isActive) {
+                val smart = Repo.smart.value
+                if (smart || Repo.uiVisible) {
+                    val ms = measure()
+                    if (ms >= 0) {
+                        bad = 0
+                        Repo.tunnelDelay.value = ms
+                    } else {
+                        bad++
+                        Repo.tunnelDelay.value = -1
+                        Logger.info("vpn", "проверка трафика: нет ответа ($bad)")
+                        if (smart && bad >= 2) {
+                            bad = 0
+                            recover()
+                        }
+                    }
+                }
+                delay(if (bad > 0) 1500L else if (Repo.uiVisible) 2500L else 15000L)
             }
-            // ни один не ответил на проверку — остаёмся на последнем: проверочный адрес мог быть просто недоступен
         }
     }
 
-    /** Реальный пинг: раз в пару секунд меряем задержку через туннель, пока приложение открыто. */
-    private fun startProbe() {
-        probe?.cancel()
-        probe = Repo.scope.launch {
-            while (isActive) {
-                if (Repo.uiVisible && Repo.vpn.value == VpnStatus.ON) {
-                    val ms = try {
-                        if (controller.isRunning) controller.measureDelay("https://www.gstatic.com/generate_204").toInt() else -1
-                    } catch (e: Exception) {
-                        -1
-                    }
-                    Repo.tunnelDelay.value = if (ms >= 0) ms.coerceAtLeast(1) else -1
+    /**
+     * Трафик пропал. Сначала перезапускаем ядро на том же сервере (после смены Wi-Fi/LTE этого достаточно),
+     * если не помогло — перемеряем пинги и по очереди пробуем самые быстрые из остальных.
+     */
+    private suspend fun recover() {
+        val curId = Repo.vpnServer.value
+        val cur = Repo.allServers().firstOrNull { it.id == curId }
+        if (cur != null) {
+            Logger.info("vpn", "трафика нет — перезапускаю ядро на ${cur.name}")
+            if (startCore(cur) == null) {
+                currentCoroutineContext().ensureActive()
+                delay(1500)
+                val ms = measure()
+                if (ms >= 0) {
+                    Logger.info("vpn", "после перезапуска трафик идёт, $ms мс")
+                    Repo.tunnelDelay.value = ms
+                    return
                 }
-                delay(2000)
             }
         }
+        withTimeoutOrNull(6000) { Repo.pingAll(1500, quiet = true) }
+        val order = ranked().filter { it.id != curId }.take(4)
+        Logger.info("vpn", "ищу другой сервер: " + order.joinToString { "${it.name} ${Repo.pings.value[it.id]?.takeIf { p -> p > 0 } ?: "—"} мс" })
+        for (s in order) {
+            currentCoroutineContext().ensureActive()
+            if (startCore(s) != null) continue
+            currentCoroutineContext().ensureActive()
+            Repo.vpnServer.value = s.id
+            enterForeground(s.name)
+            delay(600)
+            val ms = measure()
+            if (ms >= 0) {
+                Logger.info("vpn", "переключено на ${s.name}, $ms мс")
+                Repo.tunnelDelay.value = ms
+                return
+            }
+            Logger.info("vpn", "${s.name}: трафик не идёт")
+        }
+        // Ничего не помогло (например, пропала сеть). Пауза, чтобы не дёргать ядро без конца.
+        Logger.error("vpn", "ни один сервер не отвечает, повторю через 30 с")
+        delay(30000)
+    }
+
+    /**
+     * Серверы по возрастанию пинга. Если есть хотя бы один отвечающий — недоступные не берём,
+     * иначе время уйдёт на заведомо мёртвые.
+     */
+    private fun ranked(): List<Server> {
+        val pg = Repo.pings.value
+        val all = Repo.allServers()
+        val alive = all.filter { (pg[it.id] ?: -1) > 0 }
+        return (alive.ifEmpty { all }).sortedBy { pg[it.id]?.takeIf { p -> p > 0 } ?: Int.MAX_VALUE }
+    }
+
+    /** Один настоящий запрос через туннель. Возвращает задержку в мс или -1, если ответа нет. */
+    private suspend fun measure(): Int {
+        for (url in CHECK_URLS) {
+            val test = Repo.scope.async {
+                try {
+                    if (controller.isRunning) controller.measureDelay(url).toInt() else -1
+                } catch (e: Exception) {
+                    -1
+                }
+            }
+            val ms = withTimeoutOrNull(5000) { test.await() } ?: -1
+            if (ms >= 0) return ms.coerceAtLeast(1)
+        }
+        return -1
     }
 
     private fun fail(reason: String) {
@@ -192,14 +284,13 @@ class LetnieVpnService : VpnService() {
         val all = Repo.allServers()
         if (all.isEmpty()) return emptyList()
         if (Repo.smart.value) {
-            // перед выбором быстрейшего свежо измеряем пинги
-            withTimeoutOrNull(7000) { Repo.pingAll() }
+            // пинги свежее трёх секунд берём как есть, иначе перемеряем
+            val age = android.os.SystemClock.elapsedRealtime() - Repo.lastPingAt
+            if (age > 3000) withTimeoutOrNull(6000) { Repo.pingAll(1500, quiet = true) }
+            return ranked()
         }
-        val pg = Repo.pings.value
-        val sorted = all.sortedBy { s -> pg[s.id]?.takeIf { it > 0 } ?: Int.MAX_VALUE }
-        if (Repo.smart.value) return sorted
-        val chosen = Repo.current() ?: return sorted
-        return listOf(chosen) + sorted.filter { it.id != chosen.id }
+        val chosen = Repo.current() ?: return ranked()
+        return listOf(chosen) + ranked().filter { it.id != chosen.id }
     }
 
     /** Запускает ядро с сервером. null — успех, иначе причина неудачи. */
@@ -214,35 +305,25 @@ class LetnieVpnService : VpnService() {
             val config = XrayConfig.build(proxy, ip, Logger.xrayPath)
             Logger.info("core", "запуск: ${proxy.protocol}, транспорт ${proxy.q["type"] ?: "tcp"}, защита ${proxy.q["security"] ?: "нет"}, порт ${proxy.port}")
             Logger.info("core", "конфиг: ${Logger.redact(config)}")
-            stopCore()
-            Repo.tunnelDelay.value = -1
-            controller.startLoop(config, tun!!.fd)
-            if (controller.isRunning) null else "ядро не запустилось"
+            synchronized(coreLock) {
+                stopCore()
+                Repo.tunnelDelay.value = -1
+                controller.startLoop(config, tun!!.fd)
+                if (controller.isRunning) null else "ядро не запустилось"
+            }
         } catch (e: Exception) {
             "ядро: ${scrub(e.message).ifBlank { e.javaClass.simpleName }}"
         }
     }
 
     private fun stopCore() {
-        try {
-            if (controller.isRunning) controller.stopLoop()
-        } catch (e: Exception) {
-            // уже остановлено
-        }
-    }
-
-    /** Проверяем, что через сервер реально ходит трафик (не дольше 8 секунд). */
-    private suspend fun verify(): Boolean {
-        val test = Repo.scope.async {
+        synchronized(coreLock) {
             try {
-                controller.measureDelay("https://www.gstatic.com/generate_204") >= 0
+                if (controller.isRunning) controller.stopLoop()
             } catch (e: Exception) {
-                false
+                // уже остановлено
             }
         }
-        val ok = withTimeoutOrNull(8000) { test.await() } ?: false
-        Logger.info("core", "проверка трафика: ${if (ok) "успешно" else "нет ответа"}")
-        return ok
     }
 
     private fun resolve(host: String): String {
@@ -282,8 +363,7 @@ class LetnieVpnService : VpnService() {
     private fun shutdown() {
         Logger.info("vpn", "отключение")
         job?.cancel()
-        watch?.cancel()
-        probe?.cancel()
+        monitor?.cancel()
         Repo.scope.launch {
             stopCore()
             closeTun()
@@ -337,6 +417,12 @@ class LetnieVpnService : VpnService() {
     companion object {
         const val ACTION_START = "app.letnievpn.START"
         const val ACTION_STOP = "app.letnievpn.STOP"
+
+        /** Проверка трафика: если не ответил первый адрес, пробуем второй (один из них мог быть недоступен). */
+        private val CHECK_URLS = listOf(
+            "https://www.gstatic.com/generate_204",
+            "https://cp.cloudflare.com/generate_204",
+        )
         private const val CHANNEL = "vpn"
         private const val NOTIF_ID = 1
 

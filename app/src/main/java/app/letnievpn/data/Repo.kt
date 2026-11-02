@@ -43,6 +43,11 @@ object Repo {
         private set
 
     private var liveJob: Job? = null
+
+    /** Когда последний раз закончился замер пингов (SystemClock.elapsedRealtime). */
+    @Volatile
+    var lastPingAt = 0L
+        private set
     private val fails = ConcurrentHashMap<String, Int>()
 
     /** сервер, к которому сейчас подключены */
@@ -147,6 +152,7 @@ object Repo {
                 }.awaitAll()
             }
         }
+        lastPingAt = android.os.SystemClock.elapsedRealtime()
         if (!quiet) Logger.info("ping", "измерено: рабочих ${pings.value.values.count { it > 0 }} из ${allServers().size}")
     }
 
