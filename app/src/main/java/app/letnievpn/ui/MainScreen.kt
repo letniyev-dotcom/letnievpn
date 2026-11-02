@@ -16,6 +16,23 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.ScrollState
+import androidx.compose.runtime.key
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.zIndex
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -169,7 +186,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                 onReconnect()
             }
             Spacer(Modifier.height(10.dp))
-            SubsCard(subs, best, shown, pings, if (status != VpnStatus.OFF) shown?.id else null, onPickAvatar) { id ->
+            SubsCard(subs, best, shown, pings, if (status != VpnStatus.OFF) shown?.id else null, scroll, top, bottom, onPickAvatar) { id ->
                 Repo.select(id)
                 onReconnect()
             }
@@ -470,65 +487,195 @@ private fun SubsCard(
     pings: Map<String, Int>,
     /** Сервер, к которому сейчас подключены: остаётся в списке, даже если пинг не прошёл. */
     keepId: String?,
+    scroll: ScrollState,
+    top: Dp,
+    bottom: Dp,
     onAvatar: (String) -> Unit,
     onPick: (String) -> Unit,
 ) {
     val p = LocalPalette.current
     val shut = remember { mutableStateMapOf<String, Boolean>() }
     val res = LocalContext.current.resources
+    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    val dens = LocalDensity.current
+    val view = LocalView.current
+    val gapPx = with(dens) { 10.dp.toPx() }
+    // зоны у краёв экрана: если держать подписку там, список сам прокручивается
+    val zonePx = with(dens) { 72.dp.toPx() }
+    val topLimitPx = with(dens) { (top + 64.dp).toPx() }
+    val bottomInsetPx = with(dens) { bottom.toPx() }
+    val tops = remember { mutableMapOf<String, Float>() }
+    var pointerY by remember { mutableStateOf(0f) }
 
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(p.surface)
-            .padding(vertical = 4.dp)
-    ) {
-        if (subs.isEmpty()) {
-            Text(
-                stringResource(R.string.empty_subs),
-                color = p.text2, fontSize = 14.sp, lineHeight = 20.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 28.dp)
-            )
-        }
-        subs.forEach { sub ->
-            // недоступные серверы (пинг не прошёл) скрываются сами и возвращаются, когда снова отвечают
-            val visible = sub.servers.filter { pings[it.id] != -1 || it.id == keepId }
-            val closed = shut[sub.id] == true
-            // состояние читаем только в graphicsLayer: во время анимации экран не перекомпонуется
-            val rot = animateFloatAsState(if (closed) -90f else 0f, tween(320, easing = FastOutSlowInEasing), label = "chev")
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { shut[sub.id] = !closed }
-                    .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Avatar(sub) { onAvatar(sub.id) }
-                Spacer(Modifier.width(2.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        sub.name, color = p.text, fontSize = 15.sp, fontWeight = FontWeight.Medium,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                    val n = res.getQuantityString(R.plurals.servers, visible.size, visible.size)
-                    Text(
-                        if (sub.info.isBlank()) n else "$n · ${sub.info}",
-                        color = p.text2, fontSize = 12.sp, lineHeight = 16.sp
-                    )
-                }
-                Box(Modifier.graphicsLayer { rotationZ = rot.value }) { PolyIcon(CHEVRON, p.text2, 22.dp) }
+    // порядок на время перетаскивания; пересоздаётся, когда меняется состав или порядок в хранилище
+    val ids = subs.map { it.id }
+    val order = remember(ids) { mutableStateListOf<String>().apply { addAll(ids) } }
+    val heights = remember { mutableStateMapOf<String, Int>() }
+    val anims = remember { mutableMapOf<String, Animatable<Float, AnimationVector1D>>() }
+    var dragId by remember { mutableStateOf<String?>(null) }
+    var dragDy by remember { mutableStateOf(0f) }
+
+    // перетащили за середину соседа — меняемся с ним местами, сосед плавно доезжает на новое место
+    fun step() {
+        val cur = dragId ?: return
+        val i = order.indexOf(cur)
+        if (i < 0) return
+        val h = (heights[cur] ?: return).toFloat()
+        if (i < order.lastIndex) {
+            val nid = order[i + 1]
+            val nh = (heights[nid] ?: 0).toFloat()
+            if (dragDy > (nh + gapPx) / 2f) {
+                order.removeAt(i)
+                order.add(i + 1, cur)
+                dragDy -= nh + gapPx
+                anims[nid]?.let { a -> scope.launch { a.snapTo(h + gapPx); a.animateTo(0f, tween(220, easing = FastOutSlowInEasing)) } }
+                return
             }
-            Collapsible(expanded = !closed) {
-                Column {
-                    visible.forEach { s ->
-                        ServerRow(s, s.id == current?.id, s.id == best?.id, pings[s.id]) { onPick(s.id) }
+        }
+        if (i > 0) {
+            val pid = order[i - 1]
+            val ph = (heights[pid] ?: 0).toFloat()
+            if (dragDy < -(ph + gapPx) / 2f) {
+                order.removeAt(i)
+                order.add(i - 1, cur)
+                dragDy += ph + gapPx
+                anims[pid]?.let { a -> scope.launch { a.snapTo(-(h + gapPx)); a.animateTo(0f, tween(220, easing = FastOutSlowInEasing)) } }
+            }
+        }
+    }
+
+    fun drop() {
+        val cur = dragId ?: return
+        val a = anims[cur]
+        val rest = dragDy
+        scope.launch {
+            a?.snapTo(rest)
+            dragId = null
+            dragDy = 0f
+            a?.animateTo(0f, tween(220, easing = FastOutSlowInEasing))
+        }
+        Repo.reorderSubs(order.toList())
+    }
+
+    LaunchedEffect(dragId) {
+        if (dragId == null) return@LaunchedEffect
+        while (true) {
+            withFrameNanos { }
+            val y = pointerY
+            val upEdge = topLimitPx + zonePx
+            val downEdge = view.height - bottomInsetPx - zonePx
+            val v = when {
+                y < upEdge -> -((upEdge - y) / zonePx).coerceIn(0f, 1f)
+                y > downEdge -> ((y - downEdge) / zonePx).coerceIn(0f, 1f)
+                else -> 0f
+            }
+            if (v != 0f) {
+                val moved = scroll.scrollBy(v * 16f)
+                // список поехал под пальцем — подписка должна остаться под ним
+                if (moved != 0f) {
+                    dragDy += moved
+                    step()
+                }
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (subs.isEmpty()) {
+            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(p.surface)) {
+                Text(
+                    stringResource(R.string.empty_subs),
+                    color = p.text2, fontSize = 14.sp, lineHeight = 20.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 28.dp)
+                )
+            }
+        }
+        order.toList().forEach { id ->
+            val sub = subs.firstOrNull { it.id == id } ?: return@forEach
+            key(id) {
+                val anim = remember { Animatable(0f) }.also { anims[id] = it }
+                val lifted = dragId == id
+                val lift by animateFloatAsState(if (lifted) 1.02f else 1f, tween(160), label = "lift")
+                // недоступные серверы (пинг не прошёл) скрываются сами и возвращаются, когда снова отвечают
+                val shownCount = sub.servers.count { pings[it.id] != -1 || it.id == keepId }
+                val closed = shut[sub.id] == true
+                // состояние читаем только в graphicsLayer: во время анимации экран не перекомпонуется
+                val rot = animateFloatAsState(if (closed) -90f else 0f, tween(320, easing = FastOutSlowInEasing), label = "chev")
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .zIndex(if (lifted) 1f else 0f)
+                        .onSizeChanged { heights[id] = it.height }
+                        .onGloballyPositioned { tops[id] = it.positionInWindow().y }
+                        .graphicsLayer {
+                            translationY = if (lifted) dragDy else anim.value
+                            scaleX = lift
+                            scaleY = lift
+                        }
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(p.surface)
+                        // удержание поднимает подписку, дальше её можно двигать вверх и вниз
+                        .pointerInput(id) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { start ->
+                                    dragId = id
+                                    dragDy = 0f
+                                    pointerY = (tops[id] ?: 0f) + start.y
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    dragDy += amount.y
+                                    pointerY = (tops[id] ?: 0f) + dragDy + change.position.y
+                                    step()
+                                },
+                                onDragEnd = { drop() },
+                                onDragCancel = { drop() },
+                            )
+                        }
+                        .padding(vertical = 4.dp)
+                ) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { shut[sub.id] = !closed }
+                            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Avatar(sub) { onAvatar(sub.id) }
+                        Spacer(Modifier.width(2.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                sub.name, color = p.text, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis
+                            )
+                            val n = res.getQuantityString(R.plurals.servers, shownCount, shownCount)
+                            Text(
+                                if (sub.info.isBlank()) n else "$n · ${sub.info}",
+                                color = p.text2, fontSize = 12.sp, lineHeight = 16.sp
+                            )
+                        }
+                        Box(Modifier.graphicsLayer { rotationZ = rot.value }) { PolyIcon(CHEVRON, p.text2, 22.dp) }
                     }
-                    Spacer(Modifier.height(4.dp))
+                    Collapsible(expanded = !closed) {
+                        Column {
+                            // серверы без ответа уходят и возвращаются плавно, а не рывком
+                            sub.servers.forEach { s ->
+                                key(s.id) {
+                                    ServerSlot(
+                                        s, s.id == current?.id, s.id == best?.id, pings[s.id],
+                                        pings[s.id] != -1 || s.id == keepId
+                                    ) { onPick(s.id) }
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                        }
+                    }
                 }
             }
         }
@@ -597,6 +744,17 @@ private fun Avatar(sub: Sub, onClick: () -> Unit) {
                 PolyIcon(PLUS, p.primary, 18.dp)
             }
         }
+    }
+}
+
+/** Строка сервера, которая плавно сворачивается, когда сервер не отвечает, и так же плавно возвращается. */
+@Composable
+private fun ServerSlot(s: Server, selected: Boolean, best: Boolean, ping: Int?, visible: Boolean, onClick: () -> Unit) {
+    // пока строка уходит, оставляем последний рабочий пинг, а не «—»
+    val last = remember { arrayOf(ping) }
+    if (ping != -1) last[0] = ping
+    Collapsible(expanded = visible) {
+        ServerRow(s, selected, best, if (ping == -1) last[0] else ping, onClick)
     }
 }
 

@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -201,6 +202,11 @@ fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onAdd: () -> Unit) {
     val t = remember { Animatable(0f) }
     val shown by remember { derivedStateOf { t.value > 0.001f } }
     val winVisible by remember { derivedStateOf { t.value > 1.02f } }
+    // затемнение живёт своей, более длинной и мягкой анимацией — иначе оно «выстреливает» вместе с быстрым началом перелёта окна
+    val dim = remember { Animatable(0f) }
+    LaunchedEffect(mode == 2) {
+        dim.animateTo(if (mode == 2) 1f else 0f, tween(if (mode == 2) 700 else 350, easing = FastOutSlowInEasing))
+    }
 
     // заранее готовим список приложений; после закрытия окна обновляем (могли поставить новое приложение)
     LaunchedEffect(mode == 2) { if (mode != 2 || ExcludedAppsCache.apps == null) ExcludedAppsCache.load(ctx) }
@@ -227,8 +233,8 @@ fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onAdd: () -> Unit) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .graphicsLayer { alpha = (t.value - 1f).coerceIn(0f, 1f) } // затемняем только под окном, меню без затемнения
-                    .background(Color.Black.copy(alpha = if (p.dark) 0.28f else 0.16f))
+                    .graphicsLayer { alpha = dim.value } // затемняем только под окном, меню без затемнения
+                    .background(Color.Black.copy(alpha = if (p.dark) 0.22f else 0.12f))
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,

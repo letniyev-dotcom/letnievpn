@@ -144,6 +144,12 @@ object Repo {
 
     fun smartStored(): Boolean = store?.smart ?: true
 
+    /** Новый порядок подписок после перетаскивания: [ids] — идентификаторы сверху вниз. */
+    fun reorderSubs(ids: List<String>) {
+        subs.update { list -> ids.mapNotNull { id -> list.firstOrNull { it.id == id } } + list.filter { it.id !in ids } }
+        persist()
+    }
+
     private fun persist() {
         store?.subsJson = SubJson.toJson(subs.value)
     }
