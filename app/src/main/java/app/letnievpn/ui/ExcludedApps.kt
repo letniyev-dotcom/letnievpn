@@ -75,7 +75,7 @@ private class AppRow(val pkg: String, val label: String)
 private val SheetEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
 /**
- * Приложения, которые ходят мимо VPN — шторка снизу, без затемнения фона.
+ * Приложения, которые ходят мимо VPN — шторка снизу, без затемнения фона, цвет как у экрана.
  * Кладётся внутрь корневого Box экрана, поверх остального.
  * Изменения вступают в силу при следующем подключении.
  */
@@ -147,7 +147,7 @@ private fun SheetContent(onClose: () -> Unit) {
             .fillMaxHeight(0.88f)
             .offset { IntOffset(0, offsetY.value.roundToInt()) }
             .clip(shape)
-            .background(p.surface)
+            .background(p.bg)
     ) {
         val list = apps
         if (list == null) {
@@ -158,7 +158,7 @@ private fun SheetContent(onClose: () -> Unit) {
             LazyColumn(
                 Modifier.fillMaxSize(),
                 state = listState,
-                contentPadding = PaddingValues(top = 36.dp, bottom = bottom + 16.dp)
+                contentPadding = PaddingValues(top = 64.dp, bottom = bottom + 16.dp)
             ) {
                 items(list, key = { it.pkg }) { app ->
                     val on = app.pkg in excluded
@@ -189,21 +189,21 @@ private fun SheetContent(onClose: () -> Unit) {
             }
         }
 
-        // фейд вместо шапки — тот же градиент, что на главном экране, цвет шторки
+        // фейд под заголовком — тот же градиент, что на главном экране
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(88.dp)
+                .height(104.dp)
                 .graphicsLayer { alpha = fade }
                 .background(
                     Brush.verticalGradient(
-                        0.00f to p.surface,
-                        0.40f to p.surface,
-                        0.52f to p.surface.copy(alpha = 0.90f),
-                        0.64f to p.surface.copy(alpha = 0.65f),
-                        0.76f to p.surface.copy(alpha = 0.38f),
-                        0.88f to p.surface.copy(alpha = 0.14f),
-                        1.00f to p.surface.copy(alpha = 0f),
+                        0.00f to p.bg,
+                        0.40f to p.bg,
+                        0.52f to p.bg.copy(alpha = 0.90f),
+                        0.64f to p.bg.copy(alpha = 0.65f),
+                        0.76f to p.bg.copy(alpha = 0.38f),
+                        0.88f to p.bg.copy(alpha = 0.14f),
+                        1.00f to p.bg.copy(alpha = 0f),
                     )
                 )
         )
@@ -212,7 +212,7 @@ private fun SheetContent(onClose: () -> Unit) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(36.dp)
+                .height(64.dp)
                 .pointerInput(Unit) {
                     detectVerticalDragGestures(
                         onVerticalDrag = { change, dy ->
@@ -241,6 +241,13 @@ private fun SheetContent(onClose: () -> Unit) {
                     .height(4.dp)
                     .clip(RoundedCornerShape(2.dp))
                     .background(p.text2.copy(alpha = 0.45f))
+            )
+            Text(
+                "Приложения без VPN",
+                color = p.text,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp)
             )
         }
     }
