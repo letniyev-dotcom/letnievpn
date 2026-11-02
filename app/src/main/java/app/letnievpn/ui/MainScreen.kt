@@ -149,7 +149,8 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
     else subs.flatMap { it.servers }.firstOrNull { it.id == vpnServer } ?: current
 
     val scroll = rememberScrollState()
-    var showExcluded by remember { mutableStateOf(false) }
+    // 0 — меню закрыто, 1 — меню из трёх точек, 2 — окно исключений
+    var menuMode by remember { mutableStateOf(0) }
     Box(Modifier.fillMaxSize().background(p.bg)) {
         Column(
             Modifier
@@ -194,7 +195,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                 )
         )
 
-        // шапка: слева смена темы и приложения-исключения, логотип и заголовок по центру, справа «+»
+        // шапка: слева смена темы, логотип и заголовок по центру, справа три точки с меню
         Box(
             Modifier
                 .fillMaxWidth()
@@ -231,39 +232,33 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                 // в тёмной теме показываем солнце (переключить на светлую), в светлой — луну
                 ThemeIcon(p.dark, p.primary, 24.dp)
             }
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 52.dp)
-                    .size(48.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { showExcluded = true },
-                contentAlignment = Alignment.Center
-            ) {
-                AppsIcon(p.primary, 24.dp)
-            }
+            val dotsAlpha by animateFloatAsState(
+                if (menuMode == 0) 1f else 0f,
+                tween(150, delayMillis = if (menuMode == 0) 280 else 0),
+                label = "dots"
+            )
             Box(
                 Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 4.dp)
                     .size(48.dp)
+                    .graphicsLayer { alpha = dotsAlpha }
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        // «+»: молча берём подписку из буфера обмена, без сообщений и всплывашек
-                        val text = readClipboard(ctx)
-                        if (text.isNotBlank()) Repo.scope.launch { Repo.addFromText(text) }
-                    },
+                        indication = null,
+                        enabled = menuMode == 0
+                    ) { menuMode = 1 },
                 contentAlignment = Alignment.Center
             ) {
-                PlusIcon(p.primary, 26.dp)
+                DotsIcon(p.primary, 24.dp)
             }
         }
-    
-        BoxScopeExcludedSheet(showExcluded) { showExcluded = false }
+
+        BoxScopeHeaderMenu(menuMode, { menuMode = it }) {
+            // «Добавить подписку»: молча берём из буфера обмена, без сообщений и всплывашек
+            val text = readClipboard(ctx)
+            if (text.isNotBlank()) Repo.scope.launch { Repo.addFromText(text) }
+        }
     }
 }
 

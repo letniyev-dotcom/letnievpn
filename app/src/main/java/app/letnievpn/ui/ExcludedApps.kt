@@ -16,6 +16,16 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.lerp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -118,121 +128,199 @@ private fun sn(t: Float, e: Float) = sin(t).coerceIn(0f, 1f).pow(e)
 private fun cs(t: Float, e: Float) = cos(t).coerceIn(0f, 1f).pow(e)
 
 /**
- * Скругления «как в iOS» (CSS corner-shape: superellipse(k)): вместо дуги окружности угол — кривая
- * |x|^n + |y|^n = 1, где n = 2^k. Плавный переход в прямую сторону, без заметного «излома» кривизны.
+ * Контур со скруглением-суперэллипсом: при k = 1 это обычная дуга окружности (как у самого меню),
+ * при k = 1.7 — «непрерывное» скругление как в iOS (как у окна). Между ними форма перетекает плавно.
  */
-private class SquircleShape(private val radius: Dp, private val k: Float = 1.7f) : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
-        val w = size.width
-        val h = size.height
-        val r = minOf(with(density) { radius.toPx() }, w / 2f, h / 2f)
-        val e = 2f / 2f.pow(k)
-        val steps = 28
-        val path = Path()
-        path.moveTo(r, 0f)
-        path.lineTo(w - r, 0f)
-        // верхний правый
-        for (i in 1..steps) {
-            val t = i / steps.toFloat() * (PI / 2).toFloat()
-            path.lineTo(w - r + r * sn(t, e), r - r * cs(t, e))
-        }
-        path.lineTo(w, h - r)
-        // нижний правый
-        for (i in 1..steps) {
-            val t = i / steps.toFloat() * (PI / 2).toFloat()
-            path.lineTo(w - r + r * cs(t, e), h - r + r * sn(t, e))
-        }
-        path.lineTo(r, h)
-        // нижний левый
-        for (i in 1..steps) {
-            val t = i / steps.toFloat() * (PI / 2).toFloat()
-            path.lineTo(r - r * sn(t, e), h - r + r * cs(t, e))
-        }
-        path.lineTo(0f, r)
-        // верхний левый
-        for (i in 1..steps) {
-            val t = i / steps.toFloat() * (PI / 2).toFloat()
-            path.lineTo(r - r * cs(t, e), r - r * sn(t, e))
-        }
-        path.close()
-        return Outline.Generic(path)
+private fun squirclePath(l: Float, t: Float, rt: Float, b: Float, radius: Float, k: Float): Path {
+    val r = minOf(radius, (rt - l) / 2f, (b - t) / 2f).coerceAtLeast(0f)
+    val e = 2f / 2f.pow(k)
+    val steps = 28
+    val path = Path()
+    path.moveTo(l + r, t)
+    path.lineTo(rt - r, t)
+    for (i in 1..steps) {
+        val a = i / steps.toFloat() * (PI / 2).toFloat()
+        path.lineTo(rt - r + r * sn(a, e), t + r - r * cs(a, e))
     }
+    path.lineTo(rt, b - r)
+    for (i in 1..steps) {
+        val a = i / steps.toFloat() * (PI / 2).toFloat()
+        path.lineTo(rt - r + r * cs(a, e), b - r + r * sn(a, e))
+    }
+    path.lineTo(l + r, b)
+    for (i in 1..steps) {
+        val a = i / steps.toFloat() * (PI / 2).toFloat()
+        path.lineTo(l + r - r * sn(a, e), b - r + r * cs(a, e))
+    }
+    path.lineTo(l, t + r)
+    for (i in 1..steps) {
+        val a = i / steps.toFloat() * (PI / 2).toFloat()
+        path.lineTo(l + r - r * cs(a, e), t + r - r * sn(a, e))
+    }
+    path.close()
+    return path
 }
 
-/** Окно раскрывается из своего центра вверх и вниз — как в макете: клип растёт от узкой полосы до полной высоты. */
-private class RevealShape(private val p: Float, private val minH: Float, private val rStart: Float, private val rEnd: Float) : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
-        val h = minH + (size.height - minH) * p
-        val top = (size.height - h) / 2f
-        val r = rStart + (rEnd - rStart) * p
-        return Outline.Rounded(RoundRect(0f, top, size.width, top + h, CornerRadius(r, r)))
-    }
+private class MorphShape(private val rect: Rect, private val radius: Float, private val k: Float) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
+        Outline.Generic(squirclePath(rect.left, rect.top, rect.right, rect.bottom, radius, k))
+}
+
+private val MenuW = 236.dp
+private val MenuH = 184.dp // 8 + три пункта по 56 + 8
+
+/** Где стоят кнопка, меню и окно (в пикселях экрана) и как между ними переходит поверхность. */
+private class MenuGeo(val button: Rect, val menu: Rect, val win: Rect) {
+    fun rect(t: Float): Rect = if (t <= 1f) lerp(button, menu, t) else lerp(menu, win, t - 1f)
+}
+
+private fun menuGeo(d: Density, w: Dp, h: Dp, top: Dp, nav: Dp): MenuGeo = with(d) {
+    val winH = h * 0.78f
+    MenuGeo(
+        button = Rect(Offset((w - 4.dp - 48.dp).toPx(), (top + 4.dp).toPx()), Size(48.dp.toPx(), 48.dp.toPx())),
+        menu = Rect(Offset((w - 10.dp - MenuW).toPx(), (top + 8.dp).toPx()), Size(MenuW.toPx(), MenuH.toPx())),
+        win = Rect(Offset(6.dp.toPx(), (h - nav - 8.dp - winH).toPx()), Size((w - 12.dp).toPx(), winH.toPx())),
+    )
 }
 
 /**
- * Приложения, которые ходят мимо VPN — окно внизу экрана с непрерывными скруглениями и лёгким затемнением фона.
- * Кладётся внутрь корневого Box экрана, поверх остального.
- * Открытие, затемнение и прозрачность идут через graphicsLayer — без перекомпоновки и пересчёта раскладки.
- * Изменения вступают в силу при следующем подключении.
+ * Меню из трёх точек и окно исключений — одна и та же поверхность.
+ * t = 0 — она сидит на кнопке, t = 1 — раскрыта меню (обычные скругления), t = 2 — перелетела вниз и стала окном
+ * (скругление перетекает в непрерывное). Содержимое меню и окна просто проявляется и гаснет внутри неё.
+ * mode: 0 — закрыто, 1 — меню, 2 — окно приложений. Кладётся внутрь корневого Box экрана, поверх остального.
+ * Всё движение идёт через graphicsLayer — без перекомпоновки и пересчёта раскладки.
+ * Изменения исключений вступают в силу при следующем подключении.
  */
 @Composable
-fun BoxScopeExcludedSheet(visible: Boolean, onClose: () -> Unit) {
+fun BoxScopeHeaderMenu(mode: Int, onMode: (Int) -> Unit, onAdd: () -> Unit) {
     val p = LocalPalette.current
     val ctx = LocalContext.current
+    val d = LocalDensity.current
 
-    val reveal = remember { Animatable(0f) }
-    val alpha = remember { Animatable(0f) }
-    val shown by remember { derivedStateOf { reveal.value > 0.001f || alpha.value > 0.001f } }
+    val t = remember { Animatable(0f) }
+    val shown by remember { derivedStateOf { t.value > 0.001f } }
+    val winVisible by remember { derivedStateOf { t.value > 1.02f } }
 
-    // заранее готовим список приложений; после закрытия обновляем (могли поставить новое приложение)
-    LaunchedEffect(visible) { if (!visible || ExcludedAppsCache.apps == null) ExcludedAppsCache.load(ctx) }
+    // заранее готовим список приложений; после закрытия окна обновляем (могли поставить новое приложение)
+    LaunchedEffect(mode == 2) { if (mode != 2 || ExcludedAppsCache.apps == null) ExcludedAppsCache.load(ctx) }
 
-    LaunchedEffect(visible) {
-        coroutineScope {
-            if (visible) {
-                launch { reveal.animateTo(1f, tween(600, easing = RevealOpen)) }
-                launch { alpha.animateTo(1f, tween(160, easing = LinearEasing)) }
-            } else {
-                launch { reveal.animateTo(0f, tween(340, easing = RevealShut)) }
-                launch { delay(200); alpha.animateTo(0f, tween(140, easing = LinearEasing)) }
-            }
+    LaunchedEffect(mode) {
+        when (mode) {
+            0 -> t.animateTo(0f, tween(420, easing = RevealShut))
+            1 -> t.animateTo(1f, tween(520, easing = RevealOpen))
+            else -> t.animateTo(2f, tween(620, easing = RevealOpen))
         }
     }
 
-    BackHandler(enabled = visible, onBack = onClose)
+    BackHandler(enabled = mode != 0) { onMode(0) }
 
-    if (shown || visible) {
-        // лёгкое затемнение фона, тап мимо окна закрывает
-        Box(
-            Modifier
-                .fillMaxSize()
-                .graphicsLayer { this.alpha = reveal.value.coerceIn(0f, 1f) }
-                .background(Color.Black.copy(alpha = if (p.dark) 0.28f else 0.16f))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    enabled = visible,
-                    onClick = onClose
-                )
-        )
-        val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-        Box(
-            Modifier.fillMaxSize().padding(start = 6.dp, end = 6.dp, bottom = navBottom + 8.dp),
-            contentAlignment = Alignment.BottomCenter
-        ) {
-            SheetContent(
+    if (shown || mode != 0) {
+        val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val nav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val g = remember(maxWidth, maxHeight, top, nav, d) { menuGeo(d, maxWidth, maxHeight, top, nav) }
+            val winW = maxWidth - 12.dp
+            val winH = maxHeight * 0.78f
+
+            // лёгкое затемнение фона, тап мимо закрывает
+            Box(
                 Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.78f)
-                    .graphicsLayer {
-                        this.alpha = alpha.value
-                        val rv = reveal.value
-                        if (rv < 0.999f) {
-                            shape = RevealShape(rv, 52.dp.toPx(), 26.dp.toPx(), 24.dp.toPx())
-                            clip = true
-                        }
-                    }
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = t.value.coerceIn(0f, 1f) }
+                    .background(Color.Black.copy(alpha = if (p.dark) 0.28f else 0.16f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        enabled = mode != 0,
+                        onClick = { onMode(0) }
+                    )
             )
+
+            // сама поверхность: прямоугольник растёт и едет, углы меняются
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val tt = t.value
+                        val w = (tt - 1f).coerceIn(0f, 1f)
+                        shape = MorphShape(
+                            g.rect(tt),
+                            (24f + (46f - 24f) * w).dp.toPx(),
+                            1f + 0.7f * w
+                        )
+                        clip = true
+                        shadowElevation = 14.dp.toPx() * tt.coerceIn(0f, 1f)
+                        alpha = (tt / 0.15f).coerceIn(0f, 1f)
+                    }
+                    .background(p.surface)
+                    // тап по самой поверхности не должен уходить в затемнение
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {}
+                    )
+            ) {
+                // пункты меню
+                Column(
+                    Modifier
+                        .offset { IntOffset(g.menu.left.roundToInt(), g.menu.top.roundToInt()) }
+                        .requiredSize(MenuW, MenuH)
+                        .graphicsLayer {
+                            val tt = t.value
+                            alpha = if (tt <= 1f) ((tt - 0.45f) / 0.45f).coerceIn(0f, 1f)
+                            else (1f - (tt - 1f) / 0.25f).coerceIn(0f, 1f)
+                        }
+                        .padding(8.dp)
+                ) {
+                    MenuItem("Добавить подписку", "возьмём из буфера обмена", mode == 1, { PlusIcon(p.primary, 24.dp) }) {
+                        onAdd()
+                        onMode(0)
+                    }
+                    MenuItem("Исключения", "приложения мимо vpn", mode == 1, { AppsIcon(p.primary, 24.dp) }) {
+                        onMode(2)
+                    }
+                    // пока ни к чему не подключено
+                    MenuItem("Оформление", "скоро появится", mode == 1, { PaletteIcon(p.text2, 24.dp) }) {
+                        onMode(0)
+                    }
+                }
+
+                // окно приложений
+                if (winVisible || mode == 2) {
+                    SheetContent(
+                        Modifier
+                            .offset { IntOffset(g.win.left.roundToInt(), g.win.top.roundToInt()) }
+                            .requiredSize(winW, winH)
+                            .graphicsLayer { alpha = ((t.value - 1.45f) / 0.5f).coerceIn(0f, 1f) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuItem(title: String, sub: String, enabled: Boolean, icon: @Composable () -> Unit, onClick: () -> Unit) {
+    val p = LocalPalette.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                enabled = enabled,
+                onClick = onClick
+            )
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        icon()
+        Spacer(Modifier.width(14.dp))
+        Column {
+            Text(title, color = p.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            Text(sub, color = p.text2, fontSize = 12.sp, maxLines = 1)
         }
     }
 }
@@ -259,13 +347,7 @@ private fun SheetContent(modifier: Modifier) {
             else (listState.firstVisibleItemScrollOffset / 60f).coerceIn(0f, 1f)
         }
     }
-    val shape = remember { SquircleShape(46.dp, 1.7f) }
-
-    Box(
-        modifier
-            .clip(shape)
-            .background(p.surface)
-    ) {
+    Box(modifier) {
         val list = apps
         if (list != null) {
             LazyColumn(
