@@ -43,6 +43,21 @@
                 android:value="vpn" />
         </service>
 
+        <!-- Плитка в шторке быстрых настроек: включить/выключить VPN -->
+        <service
+            android:name=".vpn.LetnieTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_stat"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+
         <!-- Умное подключение: после перезагрузки телефона само поднимает VPN -->
         <receiver
             android:name=".vpn.BootReceiver"

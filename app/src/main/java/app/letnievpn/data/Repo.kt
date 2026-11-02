@@ -3,6 +3,9 @@ package app.letnievpn.data
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -17,6 +20,7 @@ import kotlinx.coroutines.sync.withPermit
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
 
 /** Общее состояние приложения: UI и VpnService живут в одном процессе и читают его отсюда. */
 object Repo {
@@ -29,6 +33,17 @@ object Repo {
     /** пинг в мс по id сервера; -1 — недоступен */
     val pings = MutableStateFlow<Map<String, Int>>(emptyMap())
     val vpn = MutableStateFlow(VpnStatus.OFF)
+
+    /** реальная задержка через туннель, мс (пока VPN включён и приложение открыто); -1 — нет данных */
+    val tunnelDelay = MutableStateFlow(-1)
+
+    /** Экран приложения сейчас на виду: фоновые замеры идут только тогда, чтобы не тратить батарею. */
+    @Volatile
+    var uiVisible = false
+        private set
+
+    private var liveJob: Job? = null
+    private val fails = ConcurrentHashMap<String, Int>()
 
     /** сервер, к которому сейчас подключены */
     val vpnServer = MutableStateFlow<String?>(null)
@@ -107,7 +122,7 @@ object Repo {
         -1
     }
 
-    suspend fun pingAll() {
+    suspend fun pingAll(timeoutMs: Int = 2500, quiet: Boolean = false) {
         pingMutex.withLock {
             val sem = Semaphore(12)
             val list = allServers()
@@ -115,18 +130,46 @@ object Repo {
                 list.map { s ->
                     async {
                         sem.withPermit {
-                            val ms = tcpPing(s.host, s.port)
-                            pings.update { it + (s.id to ms) }
+                            val ms = tcpPing(s.host, s.port, timeoutMs)
+                            // одиночный сбой не сбрасывает показание: «—» только после двух подряд
+                            val value = if (ms < 0) {
+                                val n = (fails[s.id] ?: 0) + 1
+                                fails[s.id] = n
+                                val prev = pings.value[s.id]
+                                if (prev != null && prev > 0 && n < 2) prev else -1
+                            } else {
+                                fails.remove(s.id)
+                                ms
+                            }
+                            pings.update { it + (s.id to value) }
                         }
                     }
                 }.awaitAll()
             }
         }
-        Logger.info("ping", "измерено: рабочих ${pings.value.values.count { it > 0 }} из ${allServers().size}")
+        if (!quiet) Logger.info("ping", "измерено: рабочих ${pings.value.values.count { it > 0 }} из ${allServers().size}")
     }
 
     fun refreshPings() {
         scope.launch { pingAll() }
+    }
+
+    /** Пинг в реальном времени: пока приложение на экране, серверы перемеряются каждые пару секунд. */
+    fun startLivePing() {
+        uiVisible = true
+        if (liveJob?.isActive == true) return
+        liveJob = scope.launch {
+            while (isActive) {
+                pingAll(timeoutMs = 1500, quiet = true)
+                delay(1500)
+            }
+        }
+    }
+
+    fun stopLivePing() {
+        uiVisible = false
+        liveJob?.cancel()
+        liveJob = null
     }
 
     // ── подписки ───────────────────────────────────────────────────

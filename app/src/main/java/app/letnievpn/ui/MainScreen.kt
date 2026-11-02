@@ -2,14 +2,9 @@ package app.letnievpn.ui
 
 import android.content.ClipboardManager
 import android.content.Context
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
@@ -51,13 +46,16 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.layout
+import kotlin.math.roundToInt
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -131,6 +129,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
     val status by Repo.vpn.collectAsState()
     val vpnServer by Repo.vpnServer.collectAsState()
     val connError by Repo.connError.collectAsState()
+    val tunnelMs by Repo.tunnelDelay.collectAsState()
 
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -150,7 +149,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
                 .verticalScroll(scroll)
                 .padding(top = top + 56.dp, bottom = bottom + 28.dp, start = 12.dp, end = 12.dp)
         ) {
-            PowerBlock(status, shown, smart, pings, connError, onPower)
+            PowerBlock(status, shown, smart, pings, tunnelMs, connError, onPower)
             SmartCard(smart) {
                 if (smart) {
                     Repo.setSmart(false)
@@ -161,7 +160,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
                 onReconnect()
             }
             Spacer(Modifier.height(10.dp))
-            SubsCard(subs, best, current, pings) { id ->
+            SubsCard(subs, best, shown, pings) { id ->
                 Repo.select(id)
                 onReconnect()
             }
@@ -247,6 +246,7 @@ private fun PowerBlock(
     shown: Server?,
     smart: Boolean,
     pings: Map<String, Int>,
+    tunnelMs: Int,
     connError: String,
     onPower: () -> Unit,
 ) {
@@ -310,7 +310,8 @@ private fun PowerBlock(
             shown == null -> stringResource(R.string.hint_tap)
             status == VpnStatus.OFF && smart -> stringResource(R.string.smart_prefix, shown.name)
             status == VpnStatus.ON -> {
-                val ms = pings[shown.id]
+                // реальная задержка через туннель, пока она замерена; иначе пинг до сервера
+                val ms = tunnelMs.takeIf { it > 0 } ?: pings[shown.id]
                 if (ms != null && ms > 0) "${shown.name} · $ms мс" else shown.name
             }
             else -> shown.name
@@ -446,7 +447,6 @@ private fun SubsCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .background(p.surface)
-            .animateContentSize(tween(320, easing = FastOutSlowInEasing))
             .padding(vertical = 4.dp)
     ) {
         if (subs.isEmpty()) {
@@ -459,7 +459,8 @@ private fun SubsCard(
         }
         subs.forEach { sub ->
             val closed = shut[sub.id] == true
-            val rot by animateFloatAsState(if (closed) -90f else 0f, tween(250), label = "chev")
+            // состояние читаем только в graphicsLayer: во время анимации экран не перекомпонуется
+            val rot = animateFloatAsState(if (closed) -90f else 0f, tween(320, easing = FastOutSlowInEasing), label = "chev")
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -481,15 +482,9 @@ private fun SubsCard(
                         color = p.text2, fontSize = 12.sp, lineHeight = 16.sp
                     )
                 }
-                Box(Modifier.rotate(rot)) { PolyIcon(CHEVRON, p.text2, 22.dp) }
+                Box(Modifier.graphicsLayer { rotationZ = rot.value }) { PolyIcon(CHEVRON, p.text2, 22.dp) }
             }
-            AnimatedVisibility(
-                visible = !closed,
-                enter = expandVertically(tween(320, easing = FastOutSlowInEasing), expandFrom = Alignment.Top) +
-                    fadeIn(tween(260, delayMillis = 60)),
-                exit = shrinkVertically(tween(280, easing = FastOutSlowInEasing), shrinkTowards = Alignment.Top) +
-                    fadeOut(tween(160)),
-            ) {
+            Collapsible(expanded = !closed) {
                 Column {
                     sub.servers.forEach { s ->
                         ServerRow(s, s.id == current?.id, s.id == best?.id, pings[s.id]) { onPick(s.id) }
@@ -499,6 +494,34 @@ private fun SubsCard(
             }
         }
     }
+}
+
+/**
+ * Плавное раскрытие и сворачивание списка. Высота, прозрачность и небольшой сдвиг идут от одного
+ * прогресса, поэтому содержимое не пропадает раньше, чем уходит место под ним. Прогресс читается
+ * только на этапах измерения и отрисовки: во время анимации ничего не перекомпонуется.
+ */
+@Composable
+private fun Collapsible(expanded: Boolean, content: @Composable () -> Unit) {
+    val progress = animateFloatAsState(
+        if (expanded) 1f else 0f,
+        tween(340, easing = FastOutSlowInEasing),
+        label = "collapse"
+    )
+    val alive by remember { derivedStateOf { progress.value > 0.001f } }
+    if (!expanded && !alive) return
+    Box(
+        Modifier
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints.copy(minHeight = 0))
+                val k = progress.value
+                val h = (placeable.height * k).roundToInt()
+                val shift = ((k - 1f) * placeable.height * 0.2f).roundToInt()
+                layout(placeable.width, h) { placeable.place(0, shift) }
+            }
+            .clipToBounds()
+            .graphicsLayer { alpha = progress.value }
+    ) { content() }
 }
 
 @Composable

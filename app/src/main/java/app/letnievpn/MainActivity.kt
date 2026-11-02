@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,11 +24,31 @@ import app.letnievpn.vpn.LetnieVpnService
 
 class MainActivity : ComponentActivity() {
 
+    /** Плитка шторки просит включить VPN, но нужно разрешение — просим его уже здесь. */
+    private val connectRequest = mutableStateOf(false)
+
+    override fun onStart() {
+        super.onStart()
+        Repo.startLivePing()
+    }
+
+    override fun onStop() {
+        Repo.stopLivePing()
+        super.onStop()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == ACTION_CONNECT) connectRequest.value = true
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         // тихо обновляем подписки и пинги при открытии
         Repo.refreshSubscriptions()
+        if (intent?.action == ACTION_CONNECT) connectRequest.value = true
 
         setContent {
             // 0 — ничего не ждём; иначе после выдачи разрешений включаем VPN
@@ -70,6 +91,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            LaunchedEffect(connectRequest.value) {
+                if (connectRequest.value) {
+                    connectRequest.value = false
+                    if (Repo.vpn.value == VpnStatus.OFF) startVpn()
+                }
+            }
+
             MainScreen(
                 onPower = {
                     if (Repo.vpn.value == VpnStatus.OFF) startVpn() else LetnieVpnService.stop(this)
@@ -80,5 +108,9 @@ class MainActivity : ComponentActivity() {
                 },
             )
         }
+    }
+
+    companion object {
+        const val ACTION_CONNECT = "app.letnievpn.CONNECT"
     }
 }

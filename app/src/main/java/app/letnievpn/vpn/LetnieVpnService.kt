@@ -22,6 +22,8 @@ import app.letnievpn.data.VpnStatus
 import app.letnievpn.data.XrayConfig
 import go.Seq
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -40,6 +42,7 @@ class LetnieVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
     private var job: Job? = null
     private var watch: Job? = null
+    private var probe: Job? = null
 
     private val callback = object : CoreCallbackHandler {
         override fun startup(): Long = 0
@@ -79,8 +82,10 @@ class LetnieVpnService : VpnService() {
     override fun onDestroy() {
         job?.cancel()
         watch?.cancel()
+        probe?.cancel()
         stopCore()
         closeTun()
+        Repo.tunnelDelay.value = -1
         Repo.vpn.value = VpnStatus.OFF
         Repo.vpnServer.value = null
         super.onDestroy()
@@ -124,6 +129,7 @@ class LetnieVpnService : VpnService() {
                 Repo.vpn.value = VpnStatus.ON
                 enterForeground(connected.name)
                 Repo.refreshPings()
+                startProbe()
                 if (Repo.smart.value) watchdog(order, connected)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -151,6 +157,24 @@ class LetnieVpnService : VpnService() {
                 if (verify()) return@launch
             }
             // ни один не ответил на проверку — остаёмся на последнем: проверочный адрес мог быть просто недоступен
+        }
+    }
+
+    /** Реальный пинг: раз в пару секунд меряем задержку через туннель, пока приложение открыто. */
+    private fun startProbe() {
+        probe?.cancel()
+        probe = Repo.scope.launch {
+            while (isActive) {
+                if (Repo.uiVisible && Repo.vpn.value == VpnStatus.ON) {
+                    val ms = try {
+                        if (controller.isRunning) controller.measureDelay("https://www.gstatic.com/generate_204").toInt() else -1
+                    } catch (e: Exception) {
+                        -1
+                    }
+                    Repo.tunnelDelay.value = if (ms >= 0) ms.coerceAtLeast(1) else -1
+                }
+                delay(2000)
+            }
         }
     }
 
@@ -191,6 +215,7 @@ class LetnieVpnService : VpnService() {
             Logger.info("core", "запуск: ${proxy.protocol}, транспорт ${proxy.q["type"] ?: "tcp"}, защита ${proxy.q["security"] ?: "нет"}, порт ${proxy.port}")
             Logger.info("core", "конфиг: ${Logger.redact(config)}")
             stopCore()
+            Repo.tunnelDelay.value = -1
             controller.startLoop(config, tun!!.fd)
             if (controller.isRunning) null else "ядро не запустилось"
         } catch (e: Exception) {
@@ -258,9 +283,11 @@ class LetnieVpnService : VpnService() {
         Logger.info("vpn", "отключение")
         job?.cancel()
         watch?.cancel()
+        probe?.cancel()
         Repo.scope.launch {
             stopCore()
             closeTun()
+            Repo.tunnelDelay.value = -1
             Repo.vpn.value = VpnStatus.OFF
             Repo.vpnServer.value = null
             stopForeground(STOP_FOREGROUND_REMOVE)

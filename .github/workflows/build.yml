@@ -30,8 +30,8 @@ jobs:
           gh release download --repo 2dust/AndroidLibXrayLite --pattern 'libv2ray.aar' --dir app/libs --clobber
           ls -la app/libs
 
-      # Если секреты подписи заданы — APK подписывается вашим ключом.
-      # Если нет — создаём одноразовый ключ, чтобы APK всё равно устанавливался.
+      # Свои секреты подписи (необязательно). Без них используется постоянный ключ из app/signing/letnie.jks —
+      # подпись одна и та же в каждой сборке, поэтому обновления ставятся поверх старой версии.
       - name: Prepare signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -46,15 +46,7 @@ jobs:
             echo "LETNIE_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
             echo "LETNIE_KEY_PASSWORD=${KEY_PASSWORD:-$KEYSTORE_PASSWORD}" >> "$GITHUB_ENV"
           else
-            echo "::warning::Секреты подписи не заданы, используется одноразовый ключ. Для обновлений поверх старой версии задайте KEYSTORE_BASE64 и остальные секреты."
-            keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.jks" -storetype PKCS12 \
-              -alias letnie -keyalg RSA -keysize 2048 -validity 36500 \
-              -storepass letnie-ci -keypass letnie-ci \
-              -dname "CN=letnievpn, O=letniev team"
-            echo "LETNIE_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
-            echo "LETNIE_KEYSTORE_PASSWORD=letnie-ci" >> "$GITHUB_ENV"
-            echo "LETNIE_KEY_ALIAS=letnie" >> "$GITHUB_ENV"
-            echo "LETNIE_KEY_PASSWORD=letnie-ci" >> "$GITHUB_ENV"
+            echo "Секреты не заданы — подпись постоянным ключом из репозитория"
           fi
 
       - name: Setup Gradle

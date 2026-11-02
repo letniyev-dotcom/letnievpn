@@ -6,8 +6,16 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// Подпись release-сборки. Значения задаёт GitHub Actions (см. .github/workflows/build.yml).
-val keystorePath: String? = System.getenv("LETNIE_KEYSTORE")
+// Подпись release-сборки. Если GitHub Actions передал свои секреты (LETNIE_KEYSTORE...), используются они,
+// иначе — постоянный ключ из app/signing/letnie.jks. Ключ один и тот же в каждой сборке,
+// поэтому новая версия ставится поверх старой без удаления приложения.
+val keystorePath: String = System.getenv("LETNIE_KEYSTORE") ?: "signing/letnie.jks"
+val keystorePass: String = System.getenv("LETNIE_KEYSTORE_PASSWORD") ?: "letnie-release"
+val keyAliasName: String = System.getenv("LETNIE_KEY_ALIAS") ?: "letnie"
+val keyPass: String = System.getenv("LETNIE_KEY_PASSWORD") ?: keystorePass
+
+// versionCode обязан расти с каждой сборкой, иначе Android не обновит приложение: берём номер запуска CI
+val buildNumber: Int = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
 
 android {
     namespace = "app.letnievpn"
@@ -17,8 +25,8 @@ android {
         applicationId = "app.letnievpn"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 100 + buildNumber
+        versionName = "1.1.$buildNumber"
     }
 
     // Один универсальный APK + отдельные по архитектурам (arm64 — самый лёгкий)
@@ -32,13 +40,11 @@ android {
     }
 
     signingConfigs {
-        if (keystorePath != null) {
-            create("release") {
-                storeFile = file(keystorePath)
-                storePassword = System.getenv("LETNIE_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("LETNIE_KEY_ALIAS")
-                keyPassword = System.getenv("LETNIE_KEY_PASSWORD")
-            }
+        create("release") {
+            storeFile = file(keystorePath)
+            storePassword = keystorePass
+            keyAlias = keyAliasName
+            keyPassword = keyPass
         }
     }
 
@@ -46,9 +52,7 @@ android {
         release {
             isMinifyEnabled = false
             isShrinkResources = false
-            if (keystorePath != null) {
-                signingConfig = signingConfigs.getByName("release")
-            }
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
