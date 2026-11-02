@@ -177,6 +177,7 @@ class LetnieVpnService : VpnService() {
         monitor?.cancel()
         monitor = Repo.scope.launch {
             var bad = 0
+            var lastSearch = android.os.SystemClock.elapsedRealtime()
             delay(2000)
             while (isActive) {
                 val smart = Repo.smart.value
@@ -195,9 +196,48 @@ class LetnieVpnService : VpnService() {
                         }
                     }
                 }
+                // Умный режим: раз в минуту перемеряем все серверы всех подписок и уходим на самый быстрый
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (smart && bad == 0 && now - lastSearch >= SEARCH_EVERY_MS) {
+                    lastSearch = now
+                    if (!Repo.uiVisible) withTimeoutOrNull(6000) { Repo.pingAll(1500, quiet = true) }
+                    upgrade()
+                }
                 delay(if (bad > 0) 1500L else if (Repo.uiVisible) 2500L else 15000L)
             }
         }
+    }
+
+    /**
+     * Ищет сервер быстрее текущего среди всех подписок. Переключение рвёт открытые соединения,
+     * поэтому уходим только при заметной выгоде: пинг ниже примерно на треть и минимум на 15 мс.
+     * Новый сервер должен подтвердить трафик, иначе возвращаемся на прежний.
+     */
+    private suspend fun upgrade() {
+        val curId = Repo.vpnServer.value ?: return
+        val pg = Repo.pings.value
+        val curPing = pg[curId]?.takeIf { it > 0 } ?: return
+        val cand = ranked().firstOrNull() ?: return
+        if (cand.id == curId) return
+        val candPing = pg[cand.id]?.takeIf { it > 0 } ?: return
+        if (candPing * 10 > curPing * 7 || curPing - candPing < 15) return
+        val prev = Repo.allServers().firstOrNull { it.id == curId } ?: return
+        Logger.info("vpn", "нашёлся быстрее: ${cand.name} $candPing мс вместо ${prev.name} $curPing мс, переключаюсь")
+        if (startCore(cand) == null) {
+            currentCoroutineContext().ensureActive()
+            delay(600)
+            val ms = measure()
+            if (ms >= 0) {
+                Repo.vpnServer.value = cand.id
+                enterForeground(cand.name)
+                Repo.tunnelDelay.value = ms
+                Logger.info("vpn", "переключено на ${cand.name}, $ms мс")
+                return
+            }
+        }
+        currentCoroutineContext().ensureActive()
+        Logger.info("vpn", "${cand.name} не подтвердил трафик, возвращаюсь на ${prev.name}")
+        startCore(prev)
     }
 
     /**
@@ -431,6 +471,8 @@ class LetnieVpnService : VpnService() {
             "https://www.gstatic.com/generate_204",
             "https://cp.cloudflare.com/generate_204",
         )
+        /** Как часто в умном режиме искать сервер быстрее текущего. */
+        private const val SEARCH_EVERY_MS = 60_000L
         private const val CHANNEL = "vpn"
         private const val NOTIF_ID = 1
 
