@@ -607,17 +607,8 @@ private fun SubsCard(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .zIndex(if (lifted) 1f else 0f)
-                        .onSizeChanged { heights[id] = it.height }
-                        .onGloballyPositioned { tops[id] = it.positionInWindow().y }
-                        .graphicsLayer {
-                            translationY = if (lifted) dragDy else anim.value
-                            scaleX = lift
-                            scaleY = lift
-                        }
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(p.surface)
-                        // удержание поднимает подписку, дальше её можно двигать вверх и вниз
+                        // удержание поднимает подписку, дальше её можно двигать вверх и вниз.
+                        // ловим жест ДО сдвига (graphicsLayer): иначе подписка едет за пальцем, палец «стоит» на ней, и она пружинит
                         .pointerInput(id) {
                             detectDragGesturesAfterLongPress(
                                 onDragStart = { start ->
@@ -629,13 +620,23 @@ private fun SubsCard(
                                 onDrag = { change, amount ->
                                     change.consume()
                                     dragDy += amount.y
-                                    pointerY = (tops[id] ?: 0f) + dragDy + change.position.y
+                                    pointerY = (tops[id] ?: 0f) + change.position.y
                                     step()
                                 },
                                 onDragEnd = { drop() },
                                 onDragCancel = { drop() },
                             )
                         }
+                        .zIndex(if (lifted) 1f else 0f)
+                        .onSizeChanged { heights[id] = it.height }
+                        .onGloballyPositioned { tops[id] = it.positionInWindow().y }
+                        .graphicsLayer {
+                            translationY = if (lifted) dragDy else anim.value
+                            scaleX = lift
+                            scaleY = lift
+                        }
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(p.surface)
                         .padding(vertical = 4.dp)
                 ) {
                     Row(
