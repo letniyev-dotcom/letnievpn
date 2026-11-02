@@ -4,6 +4,7 @@ import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -49,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -75,7 +77,7 @@ private class AppRow(val pkg: String, val label: String)
 private val SheetEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
 /**
- * Приложения, которые ходят мимо VPN — шторка снизу, без затемнения фона, цвет как у экрана.
+ * Приложения, которые ходят мимо VPN — шторка снизу, с лёгким плавным затемнением фона.
  * Кладётся внутрь корневого Box экрана, поверх остального.
  * Изменения вступают в силу при следующем подключении.
  */
@@ -83,12 +85,25 @@ private val SheetEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 fun BoxScopeExcludedSheet(visible: Boolean, onClose: () -> Unit) {
     BackHandler(enabled = visible, onBack = onClose)
 
-    // тап мимо шторки закрывает её (фон при этом не затемняем)
-    if (visible) {
+    // лёгкое плавное затемнение фона; тап мимо шторки закрывает её
+    val p = LocalPalette.current
+    val dim by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(if (visible) 420 else 300, easing = SheetEase),
+        label = "dim"
+    )
+    if (dim > 0.001f) {
         Box(
             Modifier
                 .fillMaxSize()
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClose)
+                .graphicsLayer { alpha = dim }
+                .background(Color.Black.copy(alpha = if (p.dark) 0.28f else 0.16f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    enabled = visible,
+                    onClick = onClose
+                )
         )
     }
 
