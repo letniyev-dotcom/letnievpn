@@ -2,7 +2,14 @@ package app.letnievpn.ui
 
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
@@ -78,11 +85,7 @@ import app.letnievpn.data.Repo
 import app.letnievpn.data.Server
 import app.letnievpn.data.Sub
 import app.letnievpn.data.VpnStatus
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import android.widget.Toast
-import app.letnievpn.data.Logger
 
 @Composable
 fun MainScreen(onPower: () -> Unit, onReconnect: () -> Unit) {
@@ -139,11 +142,12 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
     val shown: Server? = if (status == VpnStatus.OFF) current
     else subs.flatMap { it.servers }.firstOrNull { it.id == vpnServer } ?: current
 
+    val scroll = rememberScrollState()
     Box(Modifier.fillMaxSize().background(p.bg)) {
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scroll)
                 .padding(top = top + 56.dp, bottom = bottom + 28.dp, start = 12.dp, end = 12.dp)
         ) {
             PowerBlock(status, shown, smart, pings, connError, onPower)
@@ -163,14 +167,22 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
             }
         }
 
-        // растворение шапки при прокрутке
+        // растворение шапки при прокрутке: проявляется постепенно вместе со скроллом,
+        // а сам градиент плавный (кривая ease), без резкой границы
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(top + 74.dp)
+                .height(top + 96.dp)
+                .graphicsLayer { alpha = (scroll.value / 90f).coerceIn(0f, 1f) }
                 .background(
                     Brush.verticalGradient(
-                        0f to p.bg, 0.6f to p.bg, 1f to p.bg.copy(alpha = 0f)
+                        0.00f to p.bg,
+                        0.40f to p.bg,
+                        0.52f to p.bg.copy(alpha = 0.90f),
+                        0.64f to p.bg.copy(alpha = 0.65f),
+                        0.76f to p.bg.copy(alpha = 0.38f),
+                        0.88f to p.bg.copy(alpha = 0.14f),
+                        1.00f to p.bg.copy(alpha = 0f),
                     )
                 )
         )
@@ -197,31 +209,6 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
                     fontWeight = FontWeight.Medium,
                     letterSpacing = 0.1.sp
                 )
-            }
-            // слева: скачать журнал в «Загрузки»
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 4.dp)
-                    .size(48.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        Repo.scope.launch {
-                            val where = Logger.export(ctx)
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(
-                                    ctx,
-                                    if (where != null) "Журнал сохранён: $where" else "Не удалось сохранить журнал",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                DownloadIcon(p.primary, 26.dp)
             }
             Box(
                 Modifier
@@ -285,7 +272,7 @@ private fun PowerBlock(
     )
 
     Column(
-        Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 24.dp),
+        Modifier.fillMaxWidth().animateContentSize(tween(300, easing = FastOutSlowInEasing)).padding(top = 28.dp, bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(Modifier.size(132.dp), contentAlignment = Alignment.Center) {
@@ -459,6 +446,7 @@ private fun SubsCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .background(p.surface)
+            .animateContentSize(tween(320, easing = FastOutSlowInEasing))
             .padding(vertical = 4.dp)
     ) {
         if (subs.isEmpty()) {
@@ -495,11 +483,19 @@ private fun SubsCard(
                 }
                 Box(Modifier.rotate(rot)) { PolyIcon(CHEVRON, p.text2, 22.dp) }
             }
-            if (!closed) {
-                sub.servers.forEach { s ->
-                    ServerRow(s, s.id == current?.id, s.id == best?.id, pings[s.id]) { onPick(s.id) }
+            AnimatedVisibility(
+                visible = !closed,
+                enter = expandVertically(tween(320, easing = FastOutSlowInEasing), expandFrom = Alignment.Top) +
+                    fadeIn(tween(260, delayMillis = 60)),
+                exit = shrinkVertically(tween(280, easing = FastOutSlowInEasing), shrinkTowards = Alignment.Top) +
+                    fadeOut(tween(160)),
+            ) {
+                Column {
+                    sub.servers.forEach { s ->
+                        ServerRow(s, s.id == current?.id, s.id == best?.id, pings[s.id]) { onPick(s.id) }
+                    }
+                    Spacer(Modifier.height(4.dp))
                 }
-                Spacer(Modifier.height(4.dp))
             }
         }
     }
@@ -561,18 +557,6 @@ private val CHEVRON = listOf(
 private val CHECK = listOf(
     9f to 16.17f, 4.83f to 12f, 3.41f to 13.41f, 9f to 19f, 21f to 7f, 19.59f to 5.59f
 )
-
-@Composable
-private fun DownloadIcon(color: Color, size: Dp) {
-    Canvas(Modifier.size(size)) {
-        val k = this.size.width / 24f
-        val w = 2f * k
-        drawLine(color, Offset(12f * k, 4f * k), Offset(12f * k, 15f * k), strokeWidth = w, cap = StrokeCap.Round)
-        drawLine(color, Offset(7f * k, 11f * k), Offset(12f * k, 16f * k), strokeWidth = w, cap = StrokeCap.Round)
-        drawLine(color, Offset(17f * k, 11f * k), Offset(12f * k, 16f * k), strokeWidth = w, cap = StrokeCap.Round)
-        drawLine(color, Offset(5f * k, 20f * k), Offset(19f * k, 20f * k), strokeWidth = w, cap = StrokeCap.Round)
-    }
-}
 
 @Composable
 private fun PolyIcon(points: List<Pair<Float, Float>>, color: Color, size: Dp) {
