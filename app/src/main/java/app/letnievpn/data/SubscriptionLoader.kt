@@ -46,6 +46,29 @@ object SubscriptionLoader {
 
     suspend fun fetch(url: String, keepId: String? = null): Sub? = withContext(Dispatchers.IO) {
         var reason = ""
+        // JSON-конфиги xray — запасной вариант: если другой User-Agent отдаёт обычные ссылки, берём их
+        var jsonRaw: Raw? = null
+        var jsonLinks: List<String> = emptyList()
+
+        fun build(r: Raw, links: List<String>): Sub? {
+            val servers = links.mapNotNull { LinkParser.toServer(it) }.distinctBy { it.id }
+            if (servers.isEmpty()) {
+                reason = "ссылки есть (${links.size}), но ни одна не разобралась: ${links.map { it.substringBefore("://") }.distinct().joinToString()}"
+                return null
+            }
+            val name = decodeTitle(r.title)
+                ?: runCatching { URL(url).host.removePrefix("www.") }.getOrNull()
+                ?: "Подписка"
+            lastError = ""
+            return Sub(
+                id = keepId ?: UUID.nameUUIDFromBytes(url.toByteArray()).toString().take(8),
+                name = name,
+                url = url,
+                info = formatInfo(r.userInfo),
+                servers = servers,
+            )
+        }
+
         for (agent in agents) {
             try {
                 val r = get(url, agent)
@@ -56,30 +79,28 @@ object SubscriptionLoader {
                 }
                 val links = extractLinks(r.body)
                 if (links.isEmpty()) {
-                    reason = describe(r.body)
-                    Logger.info("sub", "в ответе нет ссылок: $reason")
+                    val fromJson = JsonSub.toLinks(r.body)
+                    if (fromJson.isNotEmpty()) {
+                        Logger.info("sub", "ответ — JSON-конфиги xray, серверов: ${fromJson.size}")
+                        if (jsonLinks.isEmpty()) {
+                            jsonRaw = r
+                            jsonLinks = fromJson
+                        }
+                    } else {
+                        reason = describe(r.body)
+                        Logger.info("sub", "в ответе нет ссылок: $reason")
+                    }
                     continue
                 }
-                val servers = links.mapNotNull { LinkParser.toServer(it) }.distinctBy { it.id }
-                if (servers.isEmpty()) {
-                    reason = "ссылки есть (${links.size}), но ни одна не разобралась: ${links.map { it.substringBefore("://") }.distinct().joinToString()}"
-                    continue
-                }
-                val name = decodeTitle(r.title)
-                    ?: runCatching { URL(url).host.removePrefix("www.") }.getOrNull()
-                    ?: "Подписка"
-                lastError = ""
-                return@withContext Sub(
-                    id = keepId ?: UUID.nameUUIDFromBytes(url.toByteArray()).toString().take(8),
-                    name = name,
-                    url = url,
-                    info = formatInfo(r.userInfo),
-                    servers = servers,
-                )
+                build(r, links)?.let { return@withContext it }
             } catch (e: Exception) {
                 reason = "ошибка сети: ${e.javaClass.simpleName} ${scrub(e.message)}"
                 Logger.error("sub", "запрос как $agent: $reason")
             }
+        }
+        val jr = jsonRaw
+        if (jr != null) {
+            build(jr, jsonLinks)?.let { return@withContext it }
         }
         lastError = reason.ifBlank { "не удалось загрузить подписку" }
         null
@@ -108,7 +129,7 @@ object SubscriptionLoader {
         return when {
             t.isEmpty() -> "сервер вернул пустой ответ"
             t.startsWith("<") -> "сервер вернул веб-страницу, а не подписку"
-            t.startsWith("{") || t.startsWith("[") -> "формат JSON-конфиг (пока не поддерживается)"
+            t.startsWith("{") || t.startsWith("[") -> "JSON-конфиг без поддерживаемых серверов (vless/vmess/trojan/ss)"
             t.contains("proxies:") -> "формат Clash/YAML (пока не поддерживается)"
             else -> {
                 val first = t.lineSequence().first().trim()
