@@ -75,7 +75,11 @@ import app.letnievpn.data.Repo
 import app.letnievpn.data.Server
 import app.letnievpn.data.Sub
 import app.letnievpn.data.VpnStatus
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import android.widget.Toast
+import app.letnievpn.data.Logger
 
 @Composable
 fun MainScreen(onPower: () -> Unit, onReconnect: () -> Unit) {
@@ -120,7 +124,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
     val pings by Repo.pings.collectAsState()
     val status by Repo.vpn.collectAsState()
     val vpnServer by Repo.vpnServer.collectAsState()
-    val addError by Repo.lastError.collectAsState()
+    val connError by Repo.connError.collectAsState()
 
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -139,7 +143,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
                 .verticalScroll(rememberScrollState())
                 .padding(top = top + 56.dp, bottom = bottom + 28.dp, start = 12.dp, end = 12.dp)
         ) {
-            PowerBlock(status, shown, smart, pings, onPower)
+            PowerBlock(status, shown, smart, pings, connError, onPower)
             SmartCard(smart) {
                 if (smart) {
                     Repo.setSmart(false)
@@ -150,7 +154,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
                 onReconnect()
             }
             Spacer(Modifier.height(12.dp))
-            SubsCard(subs, best, current, pings, addError) { id ->
+            SubsCard(subs, best, current, pings) { id ->
                 Repo.select(id)
                 onReconnect()
             }
@@ -191,6 +195,31 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
                     letterSpacing = 0.1.sp
                 )
             }
+            // слева: скачать журнал в «Загрузки»
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 4.dp)
+                    .size(48.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        Repo.scope.launch {
+                            val where = Logger.export(ctx)
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(
+                                    ctx,
+                                    if (where != null) "Журнал сохранён: $where" else "Не удалось сохранить журнал",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                DownloadIcon(p.primary, 26.dp)
+            }
             Box(
                 Modifier
                     .align(Alignment.CenterEnd)
@@ -228,6 +257,7 @@ private fun PowerBlock(
     shown: Server?,
     smart: Boolean,
     pings: Map<String, Int>,
+    connError: String,
     onPower: () -> Unit,
 ) {
     val p = LocalPalette.current
@@ -286,6 +316,7 @@ private fun PowerBlock(
             fontWeight = FontWeight.Medium,
         )
         val sub = when {
+            status == VpnStatus.OFF && connError.isNotBlank() -> "Не подключилось: $connError"
             shown == null -> stringResource(R.string.hint_tap)
             status == VpnStatus.OFF && smart -> stringResource(R.string.smart_prefix, shown.name)
             status == VpnStatus.ON -> {
@@ -296,10 +327,10 @@ private fun PowerBlock(
         }
         Text(
             sub,
-            color = p.text2,
+            color = if (status == VpnStatus.OFF && connError.isNotBlank()) p.primary else p.text2,
             fontSize = 14.sp,
             modifier = Modifier.padding(top = 2.dp, start = 24.dp, end = 24.dp),
-            maxLines = 1,
+            maxLines = 3,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
         )
@@ -414,7 +445,6 @@ private fun SubsCard(
     best: Server?,
     current: Server?,
     pings: Map<String, Int>,
-    error: String,
     onPick: (String) -> Unit,
 ) {
     val p = LocalPalette.current
@@ -435,14 +465,6 @@ private fun SubsCard(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 28.dp)
             )
-            if (error.isNotBlank()) {
-                Text(
-                    "Не добавилось: $error",
-                    color = p.primary, fontSize = 13.sp, lineHeight = 18.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp)
-                )
-            }
         }
         subs.forEach { sub ->
             val closed = shut[sub.id] == true
@@ -536,6 +558,18 @@ private val CHEVRON = listOf(
 private val CHECK = listOf(
     9f to 16.17f, 4.83f to 12f, 3.41f to 13.41f, 9f to 19f, 21f to 7f, 19.59f to 5.59f
 )
+
+@Composable
+private fun DownloadIcon(color: Color, size: Dp) {
+    Canvas(Modifier.size(size)) {
+        val k = this.size.width / 24f
+        val w = 2f * k
+        drawLine(color, Offset(12f * k, 4f * k), Offset(12f * k, 15f * k), strokeWidth = w, cap = StrokeCap.Round)
+        drawLine(color, Offset(7f * k, 11f * k), Offset(12f * k, 16f * k), strokeWidth = w, cap = StrokeCap.Round)
+        drawLine(color, Offset(17f * k, 11f * k), Offset(12f * k, 16f * k), strokeWidth = w, cap = StrokeCap.Round)
+        drawLine(color, Offset(5f * k, 20f * k), Offset(19f * k, 20f * k), strokeWidth = w, cap = StrokeCap.Round)
+    }
+}
 
 @Composable
 private fun PolyIcon(points: List<Pair<Float, Float>>, color: Color, size: Dp) {

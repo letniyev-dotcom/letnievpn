@@ -49,6 +49,7 @@ object SubscriptionLoader {
         for (agent in agents) {
             try {
                 val r = get(url, agent)
+                Logger.info("sub", "запрос как $agent: код ${r.code}, ответ ${r.body.length} симв.")
                 if (r.code !in 200..299) {
                     reason = "сервер ответил кодом ${r.code}"
                     continue
@@ -56,6 +57,7 @@ object SubscriptionLoader {
                 val links = extractLinks(r.body)
                 if (links.isEmpty()) {
                     reason = describe(r.body)
+                    Logger.info("sub", "в ответе нет ссылок: $reason")
                     continue
                 }
                 val servers = links.mapNotNull { LinkParser.toServer(it) }.distinctBy { it.id }
@@ -76,6 +78,7 @@ object SubscriptionLoader {
                 )
             } catch (e: Exception) {
                 reason = "ошибка сети: ${e.javaClass.simpleName} ${scrub(e.message)}"
+                Logger.error("sub", "запрос как $agent: $reason")
             }
         }
         lastError = reason.ifBlank { "не удалось загрузить подписку" }

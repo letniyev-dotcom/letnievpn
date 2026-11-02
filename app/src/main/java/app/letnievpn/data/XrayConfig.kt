@@ -12,9 +12,11 @@ object XrayConfig {
     /**
      * @param address адрес для подключения (уже разрешённый в IP, чтобы не зависеть от DNS внутри туннеля)
      */
-    fun build(p: Proxy, address: String): String {
+    fun build(p: Proxy, address: String, logPath: String = ""): String {
         val root = JSONObject()
-        root.put("log", JSONObject().put("loglevel", "warning"))
+        val log = JSONObject().put("loglevel", "warning")
+        if (logPath.isNotBlank()) log.put("access", "none").put("error", logPath)
+        root.put("log", log)
 
         root.put(
             "inbounds",

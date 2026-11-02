@@ -10,11 +10,11 @@
    4. Никаких обводок и серых полос-разделителей: формы отделяются только заливкой.
       Исключение: кнопка включения — объёмное стекло, как карточки статей в letniye.
    5. Две темы: светлая (по умолчанию) и тёмная, кнопка слева от скриншота. */
-:root{--primary:#F4A6C0;--on-primary:#2A0E18;--bg:#141012;--surface:#221B1E;--island:#2C2326;--text:#F6EEF0;--text-2:#A39499;--bg-rgb:20,16,18;--tint:rgba(244,166,192,.14);--ff:Roboto,"Segoe UI",system-ui,sans-serif;--top:38px;--ga:#3A2D32;--gb:#1E1719;--rim-hi:rgba(255,255,255,.30);--rim-lo:rgba(255,255,255,.04);--gglow:rgba(255,255,255,.06)}
-.screen.light{--primary:#D4527F;--on-primary:#FFF;--bg:#FBF4F5;--surface:#F3E8EB;--island:#FFFDFD;--text:#25181C;--text-2:#85727A;--bg-rgb:251,244,245;--tint:rgba(212,82,127,.12);--ga:#F2E2E7;--gb:#FFFDFD;--rim-hi:rgba(255,255,255,1);--rim-lo:rgba(255,255,255,.6);--gglow:rgba(255,255,255,.8)}
+:root{--primary:#F4A6C0;--on-primary:#2A0E18;--bg:#141012;--surface:#221B1E;--island:#2C2326;--text:#F6EEF0;--text-2:#A39499;--bg-rgb:20,16,18;--tint:rgba(244,166,192,.14);--ff:Roboto,"Segoe UI",system-ui,sans-serif;--top:38px;--ga:#3A2D32;--gb:#1E1719;--rim-hi:rgba(255,255,255,.30);--rim-lo:rgba(255,255,255,.04);--gglow:rgba(255,255,255,.06);--sh:rgba(0,0,0,.55);--sh2:rgba(0,0,0,.40)}
+.screen.light{--primary:#D4527F;--on-primary:#FFF;--bg:#FBF4F5;--surface:#F3E8EB;--island:#FFFDFD;--text:#25181C;--text-2:#85727A;--bg-rgb:251,244,245;--tint:rgba(212,82,127,.12);--ga:#F2E2E7;--gb:#FFFDFD;--rim-hi:rgba(255,255,255,1);--rim-lo:rgba(255,255,255,.6);--gglow:rgba(255,255,255,.8);--sh:rgba(120,60,80,.12);--sh2:rgba(120,60,80,.10)}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%}
-body{background:#E9E6EA;font-family:var(--ff);font-synthesis:none;-webkit-font-smoothing:antialiased;color:#fff;display:flex;justify-content:center;align-items:center;overflow:hidden}
+body{background:#E9E6EA;transition:none;font-family:var(--ff);font-synthesis:none;-webkit-font-smoothing:antialiased;color:#fff;display:flex;justify-content:center;align-items:center;overflow:hidden}
 button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
 svg{display:block;flex:none}
 #stage{width:408px;height:887px;transform-origin:center center;flex:none}
@@ -31,6 +31,7 @@ svg{display:block;flex:none}
 .bar{height:56px;display:grid;grid-template-columns:48px 1fr 48px;align-items:center;padding:0 4px}
 .ib{width:48px;height:48px;display:grid;place-items:center;color:var(--primary)}
 .ib svg{width:26px;height:26px;fill:currentColor}
+#logs svg{fill:none}
 .ib:active{opacity:.6}
 .ttl{justify-self:center;display:flex;align-items:center;gap:8px}
 .ttl svg{width:24px;height:24px;color:var(--primary)}
@@ -45,17 +46,14 @@ svg{display:block;flex:none}
 .pwrap{position:relative;width:148px;height:148px;display:grid;place-items:center;margin-bottom:20px}
 .pbtn{position:relative;width:148px;height:148px;border-radius:50%;display:grid;place-items:center;color:var(--text-2);
  background:linear-gradient(150deg,var(--ga) 0%,var(--gb) 100%);
- box-shadow:0 8px 24px rgba(120,60,80,.12),inset 0 0 18px var(--gglow);transition:box-shadow .5s,background .5s,color .5s,transform .2s}
+ box-shadow:0 10px 28px var(--sh),inset 0 0 18px var(--gglow);transition:box-shadow .5s,background .5s,color .5s,transform .2s}
 .pbtn::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1.5px;pointer-events:none;
  background:linear-gradient(135deg,var(--rim-hi) 0%,var(--rim-lo) 38%,var(--rim-lo) 62%,var(--rim-hi) 100%);
  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0)}
 .pbtn svg{width:56px;height:56px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;transition:color .5s}
 .pbtn:active{transform:scale(.97)}
-.screen:not(.light) .pbtn{background:var(--surface);box-shadow:none}
-.screen:not(.light) .pbtn::before{display:none}
 .pw[data-s=con] .pbtn,.pw[data-s=on] .pbtn{color:var(--primary)}
 .pw[data-s=on] .pbtn{background:linear-gradient(150deg,color-mix(in srgb,var(--primary) 26%,var(--ga)) 0%,color-mix(in srgb,var(--primary) 6%,var(--gb)) 100%);box-shadow:0 10px 30px color-mix(in srgb,var(--primary) 34%,transparent),inset 0 0 18px var(--gglow)}
-.screen:not(.light) .pw[data-s=on] .pbtn{background:color-mix(in srgb,var(--primary) 20%,var(--surface));box-shadow:none}
 /* кольцо загрузки: плавно появляется вокруг, после включения исчезает */
 .ring{position:absolute;left:-4px;top:-4px;width:156px;height:156px;overflow:visible;opacity:0;transition:opacity .45s ease;pointer-events:none}
 .ring circle{fill:none;stroke:var(--primary);stroke-width:3;stroke-linecap:round;stroke-dasharray:130 348}
@@ -70,12 +68,11 @@ svg{display:block;flex:none}
 .box{background:var(--surface);border-radius:22px}
 .smart{position:relative;display:flex;align-items:center;gap:12px;padding:16px 16px 16px 18px;margin-bottom:12px;
  background:linear-gradient(150deg,var(--ga) 0%,var(--gb) 100%);
- box-shadow:0 6px 18px rgba(120,60,80,.10),inset 0 0 14px var(--gglow)}
+ box-shadow:0 8px 22px var(--sh2),inset 0 0 14px var(--gglow)}
 .smart::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1.5px;pointer-events:none;
  background:linear-gradient(135deg,var(--rim-hi) 0%,var(--rim-lo) 38%,var(--rim-lo) 62%,var(--rim-hi) 100%);
  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0)}
-.screen:not(.light) .smart{background:var(--surface);box-shadow:none}
-.screen:not(.light) .smart::before{display:none}
+
 .smart .tx{flex:1;min-width:0}
 .smart b{display:block;font:500 16px/22px var(--ff)}
 .smart span{display:block;font:400 13px/18px var(--ff);color:var(--text-2);margin-top:2px}
@@ -107,10 +104,12 @@ svg{display:block;flex:none}
 .srv:active{opacity:.7}
 
 #shotBtn,#themeBtn{position:fixed;top:calc(10px + env(safe-area-inset-top,0px));z-index:100;display:flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:50%;background:var(--pk,#D4527F);color:#fff;font:500 14px/20px var(--ff);box-shadow:0 2px 10px rgba(0,0,0,.22);touch-action:none;user-select:none;-webkit-user-select:none}
-#shotBtn{right:12px}#themeBtn{right:68px}
+#shotBtn{right:12px}#themeBtn{left:12px}
 #shotBtn svg,#themeBtn svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 #shotBtn span{display:none}
 #shotBtn:active,#themeBtn:active{transform:scale(.96)}#shotBtn[disabled]{opacity:.6;cursor:progress}
+body.dk{background:#0C0A0B}
+::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
 #themeBtn .moon{display:none}
 body.dk #themeBtn .sun{display:none}body.dk #themeBtn .moon{display:block}
 </style>
@@ -132,7 +131,7 @@ body.dk #themeBtn .sun{display:none}body.dk #themeBtn .moon{display:block}
   </div></div>
 
  <div class="head"><div class="bar">
-  <span></span>
+  <button class="ib" id="logs" aria-label="Скачать журнал"><svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg></button>
   <div class="ttl"><svg viewBox="0 0 800 875" style="width:22px;height:24px"><use href="#logo" width="800" height="875"/></svg><h1>letnievpn</h1></div>
   <button class="ib" id="add" aria-label="Добавить подписку из буфера"><svg viewBox="0 0 24 24"><use href="#i-add"/></svg></button>
  </div></div>
@@ -197,6 +196,8 @@ $('subs').addEventListener('click',e=>{
   if(state==='on'){setS('con');clearTimeout(tm);tm=setTimeout(()=>setS('on'),1600)}}
  else if(h){const g=+h.dataset.g;shut[g]=!shut[g];render()}
 });
+/* слева: скачать журнал (в прототипе — пример файла) */
+$('logs').addEventListener('click',()=>{const b=new Blob(['letnievpn — журнал (пример)\n'],{type:'text/plain'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='letnievpn-log.txt';document.body.appendChild(a);a.click();a.remove()});
 /* «+»: молча берёт подписку из буфера обмена, без сообщений и всплывашек */
 $('add').addEventListener('click',async()=>{
  let t='';try{t=(await navigator.clipboard.readText()||'').trim()}catch(e){}
@@ -207,7 +208,18 @@ $('add').addEventListener('click',async()=>{
  sel=sel?{s:sel.s,gi:sel.gi+1,si:sel.si}:null;shut={};render();
  $('scroll').scrollTo({top:0});
 });
-$('themeBtn').addEventListener('click',()=>{const l=$('scr').classList.toggle('light');document.body.classList.toggle('dk',!l);document.getElementById('themeBtn').style.setProperty('--pk',l?'#D4527F':'#F4A6C0');document.getElementById('shotBtn').style.setProperty('--pk',l?'#D4527F':'#F4A6C0')});
+/* смена темы: волна расходится кругом от иконки */
+function applyTheme(){const l=$('scr').classList.toggle('light');document.body.classList.toggle('dk',!l);
+ const c=l?'#D4527F':'#F4A6C0';$('themeBtn').style.setProperty('--pk',c);$('shotBtn').style.setProperty('--pk',c)}
+$('themeBtn').addEventListener('click',()=>{
+ if(!document.startViewTransition||matchMedia('(prefers-reduced-motion: reduce)').matches){applyTheme();return}
+ const r=$('themeBtn').getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
+ const end=Math.hypot(Math.max(x,innerWidth-x),Math.max(y,innerHeight-y));
+ const t=document.startViewTransition(applyTheme);
+ t.ready.then(()=>document.documentElement.animate(
+  {clipPath:['circle(0px at '+x+'px '+y+'px)','circle('+end+'px at '+x+'px '+y+'px)']},
+  {duration:750,easing:'cubic-bezier(.4,0,.2,1)',pseudoElement:'::view-transition-new(root)'})).catch(()=>{});
+});
 render();
 function fit(){const k=Math.min(1,(innerHeight-24)/887,(innerWidth-24)/408);$('stage').style.transform='scale('+k+')'}
 fit();addEventListener('resize',fit);

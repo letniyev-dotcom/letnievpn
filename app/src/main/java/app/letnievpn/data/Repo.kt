@@ -39,6 +39,7 @@ object Repo {
     @Synchronized
     fun init(context: Context) {
         if (store != null) return
+        Logger.init(context)
         val s = Store(context)
         store = s
         subs.value = SubJson.fromJson(s.subsJson)
@@ -50,8 +51,11 @@ object Repo {
 
     fun hwid(): String = store?.hwid ?: ""
 
-    /** Причина последней неудачной загрузки подписки (для пустого списка). */
+    /** Причина неудачи последней загрузки подписки (внутренняя, на экране не показывается). */
     val lastError = MutableStateFlow("")
+
+    /** Причина, по которой не удалось подключиться; показывается под статусом. */
+    val connError = MutableStateFlow("")
 
     fun allServers(): List<Server> = subs.value.flatMap { it.servers }
 
@@ -118,6 +122,7 @@ object Repo {
                 }.awaitAll()
             }
         }
+        Logger.info("ping", "измерено: рабочих ${pings.value.values.count { it > 0 }} из ${allServers().size}")
     }
 
     fun refreshPings() {
@@ -143,8 +148,10 @@ object Repo {
         }
         if (sub == null) {
             lastError.value = SubscriptionLoader.lastError.ifBlank { "не удалось добавить подписку" }
+            Logger.error("sub", "подписка не добавлена: ${lastError.value}")
             return false
         }
+        Logger.info("sub", "подписка добавлена: серверов ${sub.servers.size}")
         lastError.value = ""
         subs.update { list -> listOf(sub) + list.filterNot { it.id == sub.id } }
         persist()

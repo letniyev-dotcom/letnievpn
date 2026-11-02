@@ -15,12 +15,14 @@ import androidx.core.content.ContextCompat
 import app.letnievpn.MainActivity
 import app.letnievpn.R
 import app.letnievpn.data.LinkParser
+import app.letnievpn.data.Logger
 import app.letnievpn.data.Repo
 import app.letnievpn.data.Server
 import app.letnievpn.data.VpnStatus
 import app.letnievpn.data.XrayConfig
 import go.Seq
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import libv2ray.CoreCallbackHandler
@@ -37,6 +39,7 @@ class LetnieVpnService : VpnService() {
 
     private var tun: ParcelFileDescriptor? = null
     private var job: Job? = null
+    private var watch: Job? = null
 
     private val callback = object : CoreCallbackHandler {
         override fun startup(): Long = 0
@@ -55,6 +58,7 @@ class LetnieVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         enterForeground(null)
+        Logger.info("vpn", "команда: ${intent?.action ?: "перезапуск системой"}, умное=${Repo.smart.value}, серверов=${Repo.allServers().size}")
         if (intent?.action == ACTION_STOP) {
             Repo.setDesired(false)
             shutdown()
@@ -74,6 +78,7 @@ class LetnieVpnService : VpnService() {
 
     override fun onDestroy() {
         job?.cancel()
+        watch?.cancel()
         stopCore()
         closeTun()
         Repo.vpn.value = VpnStatus.OFF
@@ -85,47 +90,78 @@ class LetnieVpnService : VpnService() {
 
     private fun connect() {
         job?.cancel()
+        watch?.cancel()
         Repo.vpn.value = VpnStatus.CONNECTING
+        Repo.connError.value = ""
         job = Repo.scope.launch {
             try {
                 val order = candidates()
                 if (order.isEmpty()) {
-                    shutdown()
+                    fail("нет серверов — добавьте подписку")
                     return@launch
                 }
+                Logger.info("vpn", "кандидаты: " + order.take(3).joinToString { "${it.name} ${Repo.pings.value[it.id] ?: "?"} мс" })
                 ensureTun()
-                val smart = Repo.smart.value
                 // В ручном режиме — только выбранный сервер, в умном — до трёх самых быстрых
-                val tries = if (smart) order.take(3) else order.take(1)
+                val tries = if (Repo.smart.value) order.take(3) else order.take(1)
                 var connected: Server? = null
+                var err = ""
                 for (s in tries) {
-                    if (!startCore(s)) continue
-                    if (!smart || verify()) {
+                    val e = startCore(s)
+                    if (e == null) {
                         connected = s
                         break
                     }
-                    stopCore()
-                }
-                if (connected == null && smart) {
-                    // проверка не прошла нигде — поднимаем самый быстрый без проверки
-                    if (startCore(order.first())) connected = order.first()
+                    err = e
                 }
                 if (connected == null) {
-                    shutdown()
+                    fail(err)
                     return@launch
                 }
+                // Сразу показываем «Подключено»; работоспособность проверяем фоном (см. watchdog)
+                Logger.info("vpn", "подключено: ${connected.name}")
                 Repo.vpnServer.value = connected.id
                 Repo.vpn.value = VpnStatus.ON
                 enterForeground(connected.name)
-                // фоном обновим пинги, чтобы список был актуальным
                 Repo.refreshPings()
+                if (Repo.smart.value) watchdog(order, connected)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                shutdown()
+                fail("${e.javaClass.simpleName}: ${scrub(e.message)}")
             }
         }
     }
+
+    /**
+     * Умное подключение: если через выбранный сервер трафик не идёт, переключаемся
+     * на следующий по пингу. Проверка идёт фоном, чтобы не задерживать подключение.
+     */
+    private fun watchdog(order: List<Server>, first: Server) {
+        watch?.cancel()
+        watch = Repo.scope.launch {
+            val others = order.filter { it.id != first.id }.take(2)
+            kotlinx.coroutines.delay(2500)
+            if (verify()) return@launch
+            for (next in others) {
+                if (startCore(next) != null) continue
+                Repo.vpnServer.value = next.id
+                enterForeground(next.name)
+                kotlinx.coroutines.delay(2500)
+                if (verify()) return@launch
+            }
+            // ни один не ответил на проверку — остаёмся на последнем: проверочный адрес мог быть просто недоступен
+        }
+    }
+
+    private fun fail(reason: String) {
+        Logger.error("vpn", "не подключилось: $reason")
+        Repo.connError.value = reason
+        shutdown()
+    }
+
+    private fun scrub(m: String?): String =
+        (m ?: "").replace(Regex("https?://\\S+"), "<url>").replace('\n', ' ').take(140)
 
     /** Упорядоченный список серверов: сначала выбранный (или самый быстрый), дальше по пингу. */
     private suspend fun candidates(): List<Server> {
@@ -142,15 +178,24 @@ class LetnieVpnService : VpnService() {
         return listOf(chosen) + sorted.filter { it.id != chosen.id }
     }
 
-    private fun startCore(server: Server): Boolean = try {
-        val proxy = LinkParser.parse(server.link) ?: return false
-        val ip = resolve(proxy.host)
-        val config = XrayConfig.build(proxy, ip)
-        stopCore()
-        controller.startLoop(config, tun!!.fd)
-        controller.isRunning
-    } catch (e: Exception) {
-        false
+    /** Запускает ядро с сервером. null — успех, иначе причина неудачи. */
+    private fun startCore(server: Server): String? {
+        val proxy = LinkParser.parse(server.link) ?: return "ссылка сервера не разобралась"
+        val ip = try {
+            resolve(proxy.host)
+        } catch (e: Exception) {
+            return "не удалось определить адрес сервера (${e.javaClass.simpleName})"
+        }
+        return try {
+            val config = XrayConfig.build(proxy, ip, Logger.xrayPath)
+            Logger.info("core", "запуск: ${proxy.protocol}, транспорт ${proxy.q["type"] ?: "tcp"}, защита ${proxy.q["security"] ?: "нет"}, порт ${proxy.port}")
+            Logger.info("core", "конфиг: ${Logger.redact(config)}")
+            stopCore()
+            controller.startLoop(config, tun!!.fd)
+            if (controller.isRunning) null else "ядро не запустилось"
+        } catch (e: Exception) {
+            "ядро: ${scrub(e.message).ifBlank { e.javaClass.simpleName }}"
+        }
     }
 
     private fun stopCore() {
@@ -161,11 +206,18 @@ class LetnieVpnService : VpnService() {
         }
     }
 
-    /** Проверяем, что через сервер реально ходит трафик. */
-    private fun verify(): Boolean = try {
-        controller.measureDelay("https://www.gstatic.com/generate_204") >= 0
-    } catch (e: Exception) {
-        false
+    /** Проверяем, что через сервер реально ходит трафик (не дольше 8 секунд). */
+    private suspend fun verify(): Boolean {
+        val test = Repo.scope.async {
+            try {
+                controller.measureDelay("https://www.gstatic.com/generate_204") >= 0
+            } catch (e: Exception) {
+                false
+            }
+        }
+        val ok = withTimeoutOrNull(8000) { test.await() } ?: false
+        Logger.info("core", "проверка трафика: ${if (ok) "успешно" else "нет ответа"}")
+        return ok
     }
 
     private fun resolve(host: String): String {
@@ -190,7 +242,7 @@ class LetnieVpnService : VpnService() {
             // пакет всегда существует
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) b.setMetered(false)
-        tun = b.establish() ?: error("VPN-интерфейс не создан")
+        tun = b.establish() ?: error("не удалось создать VPN-интерфейс")
     }
 
     private fun closeTun() {
@@ -203,7 +255,9 @@ class LetnieVpnService : VpnService() {
     }
 
     private fun shutdown() {
+        Logger.info("vpn", "отключение")
         job?.cancel()
+        watch?.cancel()
         Repo.scope.launch {
             stopCore()
             closeTun()
