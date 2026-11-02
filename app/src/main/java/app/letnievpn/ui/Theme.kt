@@ -1,11 +1,17 @@
 package app.letnievpn.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import app.letnievpn.data.Repo
@@ -65,6 +71,17 @@ fun LetnieTheme(content: @Composable () -> Unit) {
         darkColorScheme(primary = p.primary, background = p.bg, surface = p.surface, onSurface = p.text)
     } else {
         lightColorScheme(primary = p.primary, background = p.bg, surface = p.surface, onSurface = p.text)
+    }
+    // значки статус-бара и навигации читаются в обеих темах, даже если тема выбрана вручную
+    val view = LocalView.current
+    SideEffect {
+        var c: Context? = view.context
+        while (c is ContextWrapper && c !is Activity) c = c.baseContext
+        (c as? Activity)?.window?.let { w ->
+            val ctl = WindowCompat.getInsetsController(w, view)
+            ctl.isAppearanceLightStatusBars = !p.dark
+            ctl.isAppearanceLightNavigationBars = !p.dark
+        }
     }
     CompositionLocalProvider(LocalPalette provides p) {
         MaterialTheme(colorScheme = scheme, content = content)

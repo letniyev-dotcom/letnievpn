@@ -1,6 +1,21 @@
 package app.letnievpn.ui
 
 import android.content.Intent
+import android.os.Build
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -48,7 +63,7 @@ import kotlinx.coroutines.withContext
 
 private class AppRow(val pkg: String, val label: String)
 
-/** Список приложений, которые ходят мимо VPN. Изменения вступают в силу при следующем подключении. */
+/** Приложения, которые ходят мимо VPN. Изменения вступают в силу при следующем подключении. */
 @Composable
 fun ExcludedAppsDialog(onClose: () -> Unit) {
     val p = LocalPalette.current
@@ -76,56 +91,49 @@ fun ExcludedAppsDialog(onClose: () -> Unit) {
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Column(
+        // окно диалога тоже на весь экран и с прозрачным статус-баром, как главный экран
+        val view = LocalView.current
+        SideEffect {
+            (view.parent as? DialogWindowProvider)?.window?.let { w ->
+                WindowCompat.setDecorFitsSystemWindows(w, false)
+                w.statusBarColor = android.graphics.Color.TRANSPARENT
+                w.navigationBarColor = android.graphics.Color.TRANSPARENT
+                if (Build.VERSION.SDK_INT >= 29) {
+                    w.isStatusBarContrastEnforced = false
+                    w.isNavigationBarContrastEnforced = false
+                }
+                val ctl = WindowCompat.getInsetsController(w, view)
+                ctl.isAppearanceLightStatusBars = !p.dark
+                ctl.isAppearanceLightNavigationBars = !p.dark
+            }
+        }
+
+        val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val listState = rememberLazyListState()
+        val fade by remember {
+            derivedStateOf {
+                if (listState.firstVisibleItemIndex > 0) 1f
+                else (listState.firstVisibleItemScrollOffset / 90f).coerceIn(0f, 1f)
+            }
+        }
+
+        Box(
             Modifier
                 .fillMaxSize()
                 .background(p.bg)
         ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier
-                        .size(56.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onClose
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Canvas(Modifier.size(20.dp)) {
-                        val st = Stroke(width = 2.2.dp.toPx(), cap = StrokeCap.Round)
-                        drawLine(p.primary, Offset(size.width * 0.65f, size.height * 0.1f), Offset(size.width * 0.25f, size.height * 0.5f), st.width, StrokeCap.Round)
-                        drawLine(p.primary, Offset(size.width * 0.25f, size.height * 0.5f), Offset(size.width * 0.65f, size.height * 0.9f), st.width, StrokeCap.Round)
-                    }
-                }
-                Text(
-                    "Приложения без VPN",
-                    color = p.text,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-            Text(
-                "Выбранные приложения работают напрямую, мимо VPN. Изменения вступают в силу при следующем включении.",
-                color = p.text2,
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
-            )
-            Spacer(Modifier.height(8.dp))
-
             val list = apps
             if (list == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Загружаю список…", color = p.text2, fontSize = 14.sp)
+                    CircularProgressIndicator(color = p.primary, strokeWidth = 3.dp, modifier = Modifier.size(40.dp))
                 }
             } else {
-                LazyColumn(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    state = listState,
+                    contentPadding = PaddingValues(top = top + 56.dp, bottom = bottom + 24.dp)
+                ) {
                     items(list, key = { it.pkg }) { app ->
                         val on = app.pkg in excluded
                         Row(
@@ -152,7 +160,59 @@ fun ExcludedAppsDialog(onClose: () -> Unit) {
                             CheckBox(on)
                         }
                     }
-                    item { Spacer(Modifier.height(24.dp)) }
+                }
+            }
+
+            // растворение шапки при прокрутке — тот же градиент, что на главном экране
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(top + 96.dp)
+                    .graphicsLayer { alpha = fade }
+                    .background(
+                        Brush.verticalGradient(
+                            0.00f to p.bg,
+                            0.40f to p.bg,
+                            0.52f to p.bg.copy(alpha = 0.90f),
+                            0.64f to p.bg.copy(alpha = 0.65f),
+                            0.76f to p.bg.copy(alpha = 0.38f),
+                            0.88f to p.bg.copy(alpha = 0.14f),
+                            1.00f to p.bg.copy(alpha = 0f),
+                        )
+                    )
+            )
+
+            // шапка: заголовок по центру, «назад» слева
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = top)
+                    .height(56.dp)
+            ) {
+                Text(
+                    "Приложения без VPN",
+                    color = p.text,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+                Box(
+                    Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 4.dp)
+                        .size(48.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onClose
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(Modifier.size(24.dp)) {
+                        val k = size.width / 24f
+                        drawLine(p.primary, Offset(15f * k, 6f * k), Offset(9f * k, 12f * k), 2f * k, StrokeCap.Round)
+                        drawLine(p.primary, Offset(9f * k, 12f * k), Offset(15f * k, 18f * k), 2f * k, StrokeCap.Round)
+                    }
                 }
             }
         }

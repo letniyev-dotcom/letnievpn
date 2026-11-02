@@ -169,7 +169,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                 onReconnect()
             }
             Spacer(Modifier.height(10.dp))
-            SubsCard(subs, best, shown, pings, onPickAvatar) { id ->
+            SubsCard(subs, best, shown, pings, if (status != VpnStatus.OFF) shown?.id else null, onPickAvatar) { id ->
                 Repo.select(id)
                 onReconnect()
             }
@@ -230,7 +230,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                 contentAlignment = Alignment.Center
             ) {
                 // в тёмной теме показываем солнце (переключить на светлую), в светлой — луну
-                PolyIcon(if (p.dark) SUN else MOON, p.primary, 24.dp)
+                ThemeIcon(p.dark, p.primary, 24.dp)
             }
             Box(
                 Modifier
@@ -243,11 +243,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                     ) { showExcluded = true },
                 contentAlignment = Alignment.Center
             ) {
-                // иконка «приложения»: четыре квадрата
-                PolyIcon(APP_TL, p.primary, 22.dp)
-                PolyIcon(APP_TR, p.primary, 22.dp)
-                PolyIcon(APP_BL, p.primary, 22.dp)
-                PolyIcon(APP_BR, p.primary, 22.dp)
+                AppsIcon(p.primary, 24.dp)
             }
             Box(
                 Modifier
@@ -264,7 +260,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: 
                     },
                 contentAlignment = Alignment.Center
             ) {
-                PolyIcon(PLUS, p.primary, 26.dp)
+                PlusIcon(p.primary, 26.dp)
             }
         }
     }
@@ -476,6 +472,8 @@ private fun SubsCard(
     best: Server?,
     current: Server?,
     pings: Map<String, Int>,
+    /** Сервер, к которому сейчас подключены: остаётся в списке, даже если пинг не прошёл. */
+    keepId: String?,
     onAvatar: (String) -> Unit,
     onPick: (String) -> Unit,
 ) {
@@ -499,6 +497,8 @@ private fun SubsCard(
             )
         }
         subs.forEach { sub ->
+            // недоступные серверы (пинг не прошёл) скрываются сами и возвращаются, когда снова отвечают
+            val visible = sub.servers.filter { pings[it.id] != -1 || it.id == keepId }
             val closed = shut[sub.id] == true
             // состояние читаем только в graphicsLayer: во время анимации экран не перекомпонуется
             val rot = animateFloatAsState(if (closed) -90f else 0f, tween(320, easing = FastOutSlowInEasing), label = "chev")
@@ -519,7 +519,7 @@ private fun SubsCard(
                         sub.name, color = p.text, fontSize = 15.sp, fontWeight = FontWeight.Medium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
-                    val n = res.getQuantityString(R.plurals.servers, sub.servers.size, sub.servers.size)
+                    val n = res.getQuantityString(R.plurals.servers, visible.size, visible.size)
                     Text(
                         if (sub.info.isBlank()) n else "$n · ${sub.info}",
                         color = p.text2, fontSize = 12.sp, lineHeight = 16.sp
@@ -529,7 +529,7 @@ private fun SubsCard(
             }
             Collapsible(expanded = !closed) {
                 Column {
-                    sub.servers.forEach { s ->
+                    visible.forEach { s ->
                         ServerRow(s, s.id == current?.id, s.id == best?.id, pings[s.id]) { onPick(s.id) }
                     }
                     Spacer(Modifier.height(4.dp))
@@ -653,22 +653,6 @@ private fun ServerRow(s: Server, selected: Boolean, best: Boolean, ping: Int?, o
 private val PLUS = listOf(
     19f to 13f, 13f to 13f, 13f to 19f, 11f to 19f, 11f to 13f, 5f to 13f,
     5f to 11f, 11f to 11f, 11f to 5f, 13f to 5f, 13f to 11f, 19f to 11f
-)
-private val APP_TL = listOf(3f to 3f, 11f to 3f, 11f to 11f, 3f to 11f)
-private val APP_TR = listOf(13f to 3f, 21f to 3f, 21f to 11f, 13f to 11f)
-private val APP_BL = listOf(3f to 13f, 11f to 13f, 11f to 21f, 3f to 21f)
-private val APP_BR = listOf(13f to 13f, 21f to 13f, 21f to 21f, 13f to 21f)
-private val MOON = listOf(
-    11.38f to 3.02f, 8.68f to 3.64f, 6.29f to 5.04f, 4.45f to 7.11f, 3.32f to 9.64f, 3.01f to 12.39f,
-    3.55f to 15.10f, 4.90f to 17.53f, 6.91f to 19.42f, 9.41f to 20.62f, 12.15f to 21.00f, 14.88f to 20.53f,
-    17.34f to 19.25f, 19.29f to 17.28f, 20.55f to 14.81f, 18.53f to 15.72f, 16.34f to 16.00f, 14.16f to 15.62f,
-    12.18f to 14.63f, 10.58f to 13.10f, 9.49f to 11.18f, 9.02f to 9.02f, 9.19f to 6.81f, 10.00f to 4.75f
-)
-private val SUN = listOf(
-    21.50f to 12.00f, 17.80f to 13.55f, 20.23f to 16.75f, 16.24f to 16.24f, 16.75f to 20.23f, 13.55f to 17.80f,
-    12.00f to 21.50f, 10.45f to 17.80f, 7.25f to 20.23f, 7.76f to 16.24f, 3.77f to 16.75f, 6.20f to 13.55f,
-    2.50f to 12.00f, 6.20f to 10.45f, 3.77f to 7.25f, 7.76f to 7.76f, 7.25f to 3.77f, 10.45f to 6.20f,
-    12.00f to 2.50f, 13.55f to 6.20f, 16.75f to 3.77f, 16.24f to 7.76f, 20.23f to 7.25f, 17.80f to 10.45f
 )
 private val CHEVRON = listOf(
     7.41f to 8.59f, 12f to 13.17f, 16.59f to 8.59f, 18f to 10f, 12f to 16f, 6f to 10f
