@@ -10,7 +10,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +75,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // аватарка подписки: системный выбор фото, разрешения не нужны
+            var avatarFor by remember { mutableStateOf<String?>(null) }
+            val gallery = rememberLauncherForActivityResult(
+                ActivityResultContracts.PickVisualMedia()
+            ) { uri ->
+                val id = avatarFor
+                avatarFor = null
+                if (uri != null && id != null) Repo.scope.launch { Repo.setAvatar(id, uri) }
+            }
+
             fun startVpn() {
                 pendingStart = true
                 val needNotif = Build.VERSION.SDK_INT >= 33 &&
@@ -105,6 +117,10 @@ class MainActivity : ComponentActivity() {
                 onReconnect = {
                     // сменили сервер или режим во время работы — переподключаем
                     if (Repo.vpn.value != VpnStatus.OFF) LetnieVpnService.start(this)
+                },
+                onPickAvatar = { id ->
+                    avatarFor = id
+                    gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 },
             )
         }

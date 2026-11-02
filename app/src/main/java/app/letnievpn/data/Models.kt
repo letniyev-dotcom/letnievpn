@@ -20,6 +20,8 @@ data class Sub(
     val url: String?,
     val info: String,
     val servers: List<Server>,
+    /** Имя файла аватарки в filesDir/avatars; null — аватарки нет, показывается «+». */
+    val avatar: String? = null,
 )
 
 object SubJson {
@@ -38,6 +40,7 @@ object SubJson {
                 JSONObject()
                     .put("id", s.id).put("name", s.name).put("url", s.url ?: JSONObject.NULL)
                     .put("info", s.info).put("servers", servers)
+                    .put("avatar", s.avatar ?: JSONObject.NULL)
             )
         }
         return arr.toString()
@@ -53,6 +56,7 @@ object SubJson {
                 name = o.getString("name"),
                 url = if (o.isNull("url")) null else o.getString("url"),
                 info = o.optString("info", ""),
+                avatar = if (o.isNull("avatar")) null else o.optString("avatar").ifBlank { null },
                 servers = (0 until sa.length()).map { j ->
                     val v = sa.getJSONObject(j)
                     Server(

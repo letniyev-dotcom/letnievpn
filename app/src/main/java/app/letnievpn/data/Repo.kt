@@ -1,6 +1,15 @@
 package app.letnievpn.data
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
+import android.net.Uri
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -54,12 +63,15 @@ object Repo {
     val vpnServer = MutableStateFlow<String?>(null)
 
     private var store: Store? = null
+    private var appContext: Context? = null
+    private val avatarCache = ConcurrentHashMap<String, ImageBitmap>()
     private val pingMutex = Mutex()
 
     @Synchronized
     fun init(context: Context) {
         if (store != null) return
         Logger.init(context)
+        appContext = context.applicationContext
         val s = Store(context)
         store = s
         subs.value = SubJson.fromJson(s.subsJson)
@@ -202,7 +214,8 @@ object Repo {
         }
         Logger.info("sub", "подписка добавлена: серверов ${sub.servers.size}")
         lastError.value = ""
-        subs.update { list -> listOf(sub) + list.filterNot { it.id == sub.id } }
+        val merged = sub.copy(avatar = subs.value.firstOrNull { it.id == sub.id }?.avatar)
+        subs.update { list -> listOf(merged) + list.filterNot { it.id == sub.id } }
         persist()
         pingAll()
         return true
@@ -214,11 +227,76 @@ object Repo {
             subs.value.filter { it.url != null }.forEach { old ->
                 val fresh = SubscriptionLoader.fetch(old.url!!, old.id)
                 if (fresh != null) {
-                    subs.update { list -> list.map { if (it.id == old.id) fresh else it } }
+                    // аватарка принадлежит пользователю, а не подписке: при обновлении серверов не теряем её
+                    subs.update { list -> list.map { if (it.id == old.id) fresh.copy(avatar = it.avatar) else it } }
                     persist()
                 }
             }
             pingAll()
         }
+    }
+
+    // ── аватарки подписок ──────────────────────────────────────────
+
+    /** Читает картинку из галереи, обрезает по центру до квадрата 256 px и сохраняет в память приложения. */
+    suspend fun setAvatar(subId: String, uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        val ctx = appContext ?: return@withContext false
+        try {
+            val bmp = decodeSquare(ctx, uri, 256) ?: return@withContext false
+            val dir = File(ctx.filesDir, "avatars").apply { mkdirs() }
+            // новое имя при каждой смене: так кэш и экран не показывают старую картинку
+            val name = subId.filter { it.isLetterOrDigit() }.take(24) + "-" + System.currentTimeMillis() + ".jpg"
+            File(dir, name).outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+            val old = subs.value.firstOrNull { it.id == subId }?.avatar
+            subs.update { list -> list.map { if (it.id == subId) it.copy(avatar = name) else it } }
+            persist()
+            if (old != null) {
+                File(dir, old).delete()
+                avatarCache.remove(old)
+            }
+            true
+        } catch (e: Exception) {
+            Logger.error("avatar", "не удалось сохранить аватарку: ${e.javaClass.simpleName}")
+            false
+        }
+    }
+
+    fun loadAvatar(name: String): ImageBitmap? {
+        avatarCache[name]?.let { return it }
+        val ctx = appContext ?: return null
+        val bmp = BitmapFactory.decodeFile(File(ctx.filesDir, "avatars/$name").path) ?: return null
+        return bmp.asImageBitmap().also { avatarCache[name] = it }
+    }
+
+    private fun decodeSquare(ctx: Context, uri: Uri, size: Int): Bitmap? {
+        val cr = ctx.contentResolver
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (minOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= size) sample *= 2
+        val raw = cr.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        } ?: return null
+        // фото с камеры часто хранятся «лёжа» и повёрнуты меткой EXIF
+        val deg = try {
+            cr.openInputStream(uri)?.use {
+                when (ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, 1)) {
+                    6 -> 90f
+                    3 -> 180f
+                    8 -> 270f
+                    else -> 0f
+                }
+            } ?: 0f
+        } catch (e: Exception) {
+            0f
+        }
+        val side = minOf(raw.width, raw.height)
+        val m = Matrix().apply {
+            postRotate(deg)
+            val k = size.toFloat() / side
+            postScale(k, k)
+        }
+        return Bitmap.createBitmap(raw, (raw.width - side) / 2, (raw.height - side) / 2, side, side, m, true)
     }
 }

@@ -47,6 +47,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -86,11 +91,11 @@ import app.letnievpn.data.VpnStatus
 import kotlinx.coroutines.launch
 
 @Composable
-fun MainScreen(onPower: () -> Unit, onReconnect: () -> Unit) {
+fun MainScreen(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: (String) -> Unit) {
     // размер шрифта не раздуваем системным масштабом — иначе блоки выходят громоздкими
     val d = LocalDensity.current
     CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = minOf(d.fontScale, 1f))) {
-        LetnieTheme { Content(onPower, onReconnect) }
+        LetnieTheme { Content(onPower, onReconnect, onPickAvatar) }
     }
 }
 
@@ -118,7 +123,7 @@ private fun Modifier.glass(
     )
 
 @Composable
-private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
+private fun Content(onPower: () -> Unit, onReconnect: () -> Unit, onPickAvatar: (String) -> Unit) {
     val p = LocalPalette.current
     val ctx = LocalContext.current
 
@@ -160,7 +165,7 @@ private fun Content(onPower: () -> Unit, onReconnect: () -> Unit) {
                 onReconnect()
             }
             Spacer(Modifier.height(10.dp))
-            SubsCard(subs, best, shown, pings) { id ->
+            SubsCard(subs, best, shown, pings, onPickAvatar) { id ->
                 Repo.select(id)
                 onReconnect()
             }
@@ -436,6 +441,7 @@ private fun SubsCard(
     best: Server?,
     current: Server?,
     pings: Map<String, Int>,
+    onAvatar: (String) -> Unit,
     onPick: (String) -> Unit,
 ) {
     val p = LocalPalette.current
@@ -468,9 +474,11 @@ private fun SubsCard(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) { shut[sub.id] = !closed }
-                    .padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 6.dp),
+                    .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Avatar(sub) { onAvatar(sub.id) }
+                Spacer(Modifier.width(2.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         sub.name, color = p.text, fontSize = 15.sp, fontWeight = FontWeight.Medium,
@@ -522,6 +530,43 @@ private fun Collapsible(expanded: Boolean, content: @Composable () -> Unit) {
             .clipToBounds()
             .graphicsLayer { alpha = progress.value }
     ) { content() }
+}
+
+/**
+ * Маленькая круглая аватарка рядом с названием подписки. Пока картинки нет — кружок с «+»,
+ * нажатие открывает галерею. Область нажатия 44 dp, чтобы попадать пальцем.
+ */
+@Composable
+private fun Avatar(sub: Sub, onClick: () -> Unit) {
+    val p = LocalPalette.current
+    val bmp by produceState<ImageBitmap?>(null, sub.avatar) {
+        value = sub.avatar?.let { name -> withContext(Dispatchers.IO) { Repo.loadAvatar(name) } }
+    }
+    Box(
+        Modifier
+            .size(44.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        val b = bmp
+        Box(
+            Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(if (b == null) p.primary.copy(alpha = 0.14f) else Color.Transparent),
+            contentAlignment = Alignment.Center
+        ) {
+            if (b != null) {
+                Image(b, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            } else {
+                PolyIcon(PLUS, p.primary, 18.dp)
+            }
+        }
+    }
 }
 
 @Composable
